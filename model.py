@@ -2,6 +2,7 @@
 model.py
 """
 import torch
+import torch.nn as nn
 
 class MultiHeadAttention(nn.Module):
     """Causal Multi-headed causal self-attention with RoPE positional Encoding

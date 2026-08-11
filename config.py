@@ -11,11 +11,12 @@ class ModelConfig:
     n_heads: int        = 6
     n_layers: int       = 12
     seq_len: int        = 512
-    hidden_dropout: int = 0.1
+    hd_dropout: float   = 0.1
     lm_dropout: float   = 0.0
 
 @dataclass
 class TrainConfig:
+    seed: int       = 42
     lr: float       = 3e-4
     batch_size: int = 32
     max_iters: int  = 100
@@ -23,6 +24,9 @@ class TrainConfig:
     
 @dataclass
 class DataConfig:
-    data_path: str      = "/data/"
+    train_path: str     = "/data/"
+    val_path: str       = "/data/"
+    seq_len: str        = 512
+    stride: int         = 1
     val_split: float    = 0.05
     test_split: float   = 0.05
