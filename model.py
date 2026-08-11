@@ -60,3 +60,6 @@ class SmolGPT(nn.Module):
         
     def forward(self,):
         return
+    
+if __name__=='main':
+    

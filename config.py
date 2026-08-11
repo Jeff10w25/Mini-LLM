@@ -24,9 +24,13 @@ class TrainConfig:
     
 @dataclass
 class DataConfig:
-    train_path: str     = "/data/"
-    val_path: str       = "/data/"
-    seq_len: str        = 512
-    stride: int         = 1
-    val_split: float    = 0.05
-    test_split: float   = 0.05
+    data_source: str        = "HuggingFaceFW/fineweb-edu"
+    data_source_name: str   = "sample-10BT"
+    cache_dir: str          = "data/hf_cache/"
+    train_bin_path: str     = "data/train_corpus.bin"
+    valid_bin_path: str     = "data/valid_corpus.bin"
+    max_train_token: int    = 950_000_000   
+    max_valid_token: int    = 50_000_000  # 5% of total tokens for validation
+    chunk_size: int         = 50_000_000  # Tokenization chunking so it can fit in RAM
+    seq_len: int            = 512
+    stride: int             = 512
