@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 import config
 
+#sTODO: add safeguard to prevent overwriting data
+
 # Load HF_TOKEN to allows faster download from HuggingFace
 load_dotenv()
 
