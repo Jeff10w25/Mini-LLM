@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import os
+import tiktoken
 from torch.utils.data import Dataset
 from datasets import load_dataset
 from dotenv import load_dotenv
@@ -36,7 +37,7 @@ class TokenDataset(Dataset):
         self.stride = stride  
 
     def __len__(self) -> int:
-        return (len(self.encoded_text) - self.seq_len) // self.stride
+        return (len(self.token) - self.seq_len) // self.stride
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         if idx >= len(self):
@@ -47,6 +48,13 @@ class TokenDataset(Dataset):
         y = torch.from_numpy(self.token[start+1 : end+1])
         return X, y
 
+enc = tiktoken.get_encoding("gpt2")
+
+def encode_document(text: str) -> list[int]:
+    return enc.encode(text)
+
+def decode_tokens(ids) -> str:
+    return enc.decode(ids)
 
 def batch_tokenize(stream, out_path, max_token, chunk_size, tokenizer):
     """Tokenize corpus in chunk"""
@@ -64,16 +72,18 @@ def batch_tokenize(stream, out_path, max_token, chunk_size, tokenizer):
                 buffer.extend(ids)
                 buffer.append(tokenizer.eot_token)
             
-            if len(buffer) >= chunk_size:
+            remaining = max_token - total_token
+            if len(buffer) >= remaining:        # Final buffer.
+                buffer = buffer[:remaining]     # trim to match exact max tokens
                 total_token += len(buffer)
-                arr = np.asarray(buffer, dtype=np.uint16)
-                arr.tofile(f)
-                print(f"Token amount has reaches buffer size!, saving..." )
-                print(f" Accumulated tokens: {total_token:,}/{max_token:,}")
+                np.asarray(buffer, dtype=np.uint16).tofile(f)
+                break   
+                            
+            if len(buffer) >= chunk_size:       # normal buffer, saves data once it reach desires chunk size
+                total_token += len(buffer)
+                np.asarray(buffer, dtype=np.uint16).tofile(f)
+                print(f"Accumulated tokens: {total_token:,}/{max_token:,}")
                 buffer.clear() # reset buffer size to 0
-            
-            if total_token >= max_token:
-                break
 
     return total_token
     
