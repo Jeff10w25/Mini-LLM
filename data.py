@@ -49,9 +49,7 @@ class TokenDataset(Dataset):
 
 
 def batch_tokenize(stream, out_path, max_token, chunk_size, tokenizer):
-    """Tokenize corpus in chunk
-    """
-    
+    """Tokenize corpus in chunk"""
     assert tokenizer.n_vocab <= 65535 # check that vocab_size is smaller than uint16
     
     total_token = 0
