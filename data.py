@@ -1,21 +1,24 @@
 """data.py — token arrays, TokenDataset, and dataset construction."""
 
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 import os
 import tiktoken
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from datasets import load_dataset
 from dotenv import load_dotenv
 
 import config
 
-#sTODO: add safeguard to prevent overwriting data
-
-# Load HF_TOKEN to allows faster download from HuggingFace
-load_dotenv()
+if TYPE_CHECKING:
+    # only read by your IDE/Type Checker, completely ignored at runtime
+    from torch import Tensor
+    from datasets import IterableDataset
+    from config import DataConfig
 
 class TokenDataset(Dataset):
     """
@@ -31,113 +34,174 @@ class TokenDataset(Dataset):
                     Stride < seq_len is only use to grow the corpus if there isn't enough data.
                     Or if the data download from HuggingFace is a bottleneck.
     """
-    def __init__(self, path: str, seq_len: int, stride: int = 512):
-        self.token = np.memmap(path, dtype=np.uint16, mode="r") 
+    def __init__(self, path: str, seq_len: int, stride: int = None, max_tokens: int = None):
+        self.token = np.memmap(path, dtype=np.uint16, mode="r+") 
         self.seq_len = seq_len
-        self.stride = stride  
-
+        self.stride = seq_len if stride is None else stride
+        self.length = len(self.token) if max_tokens is None else max_tokens
+        
     def __len__(self) -> int:
-        return (len(self.token) - self.seq_len) // self.stride
+        return (self.length - self.seq_len) // self.stride
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
         if idx >= len(self):
             raise ValueError("Index is out of range.")
         start = idx * self.stride
         end = start + self.seq_len
-        X = torch.from_numpy(self.token[start : end])
-        y = torch.from_numpy(self.token[start+1 : end+1])
+        window = torch.from_numpy(self.token[start:end + 1]).long() # 1 memmap read
+        X = window[:-1] # [start : end]
+        y = window[1:] # [start+1 : end+1]
         return X, y
 
-enc = tiktoken.get_encoding("gpt2")
+class DataPipeline:
+    """
+    DataPipeline builds the tokenized corpus from HuggingFace (streaming) into
+    compact uint16 .bin files, then assembles train/validation DataLoaders.
+    The corpus is built once and reused across sessions (skipped if it exists).
 
-def encode_document(text: str) -> list[int]:
-    return enc.encode(text)
+    Input/Output: make_pipeline() -> (train_loader, valid_loader)
 
-def decode_tokens(ids) -> str:
-    return enc.decode(ids)
+    Attributes:
+        cfg (DataConfig): Data hyperparameters (data_source, paths, token
+                    budgets, chunk_size, seq_len, stride).
+        tokenizer (Encoding): tiktoken encoder used for tokenization.
+                    (r50k_base → n_vocab ≈ 50257) 
+    """
+    def __init__(self, cfg: DataConfig):
+        self.cfg = cfg
+        self.tokenizer = tiktoken.get_encoding("r50k_base")
 
-def batch_tokenize(stream, out_path, max_token, chunk_size, tokenizer):
-    """Tokenize corpus in chunk"""
-    assert tokenizer.n_vocab <= 65535 # check that vocab_size is smaller than uint16
-    
-    total_token = 0
-    buffer = []
-    with open(out_path, "wb") as f:
-        for batch in stream.iter(batch_size=10000):
-            encoded = tokenizer.encode_batch(batch["text"])
-            
-            for ids in encoded:
-                """flatten the doc and append EOS token to the end each document
-                to separate the document"""
-                buffer.extend(ids)
-                buffer.append(tokenizer.eot_token)
-            
-            remaining = max_token - total_token
-            if len(buffer) >= remaining:        # Final buffer.
-                buffer = buffer[:remaining]     # trim to match exact max tokens
-                total_token += len(buffer)
-                np.asarray(buffer, dtype=np.uint16).tofile(f)
-                break   
-                            
-            if len(buffer) >= chunk_size:       # normal buffer, saves data once it reach desires chunk size
-                total_token += len(buffer)
-                np.asarray(buffer, dtype=np.uint16).tofile(f)
-                print(f"Accumulated tokens: {total_token:,}/{max_token:,}")
-                buffer.clear() # reset buffer size to 0
-
-    return total_token
-    
-def load_and_tokenize(tokenizer) -> torch.Tensor:
-    """Stream corpus from HuggingFace -> batch tokenize -> numpy array -> saves to .bin in output path"""
-    cfg = config.DataConfig()
-    train_max_token_needed = cfg.max_train_token * cfg.stride // cfg.seq_len
-    valid_max_token_needed = cfg.max_valid_token * cfg.stride // cfg.seq_len
-    
-    # Take first n amount of train_max_token_needed
-    train_stream = load_dataset(
-        cfg.data_source, 
-        name=cfg.data_source_name, 
-        streaming=True, 
-        split="train", 
-        cache_dir=cfg.cache_dir
-        ).take(train_max_token_needed)
-    
-    # Skip first n amount of train_max_token_needed
-    valid_stream = load_dataset(
-        cfg.data_source, 
-        name=cfg.data_source_name, 
-        streaming=True, 
-        split="train", 
-        cache_dir=cfg.cache_dir
-        ).skip(train_max_token_needed)
-    
-    train_len = batch_tokenize(train_stream, cfg.train_bin_path, train_max_token_needed, cfg.chunk_size, tokenizer)
-    valid_len = batch_tokenize(valid_stream, cfg.valid_bin_path, valid_max_token_needed, cfg.chunk_size, tokenizer)
-            
-    print(f"Training set loaded. Total {len(train_len)} tokens")
-    print(f"Validation set loaded. Total {len(valid_len)} tokens")
+    def batch_tokenize(self, stream: IterableDataset, out_path: str, max_token: int, chunk_size: int) -> int:
+        """Tokenize corpus in chunk"""
+        assert self.tokenizer.n_vocab <= 65535 # check that vocab_size is smaller than uint16
         
+        total_token = 0
+        buffer = []
+        with open(out_path, "wb") as f:
+            for batch in stream.iter(batch_size=10000):
+                encoded = self.tokenizer.encode_batch(batch["text"])
+                
+                for ids in encoded:
+                    """flatten the doc and append EOS token to the end each document
+                    to separate the document"""
+                    buffer.extend(ids)
+                    buffer.append(self.tokenizer.eot_token)
+                
+                remaining = max_token - total_token
+                if len(buffer) >= remaining:        # Final buffer.
+                    buffer = buffer[:remaining]     # trim to match exact max tokens
+                    total_token += len(buffer)
+                    np.asarray(buffer, dtype=np.uint16).tofile(f)
+                    break   
+                                
+                if len(buffer) >= chunk_size:       # normal buffer, saves data once it reach desires chunk size
+                    total_token += len(buffer)
+                    np.asarray(buffer, dtype=np.uint16).tofile(f)
+                    print(f"Accumulated tokens: {total_token:,}/{max_token:,}")
+                    buffer.clear() # reset buffer size to 0
+
+        return total_token
+        
+    def build_corpus(self) -> int:
+        """Stream corpus from HuggingFace -> batch tokenize -> numpy array -> saves to corpus.bin in output path"""
+        stream = load_dataset(
+            self.cfg.data_source,
+            name=self.cfg.data_source_name,
+            split="train",
+            streaming=True,
+            cache_dir=self.cfg.cache_dir,
+        )
+        total = self.cfg.total_token
+        corpus_len = self.batch_tokenize(stream, self.cfg.corpus_bin_path, total, self.cfg.chunk_size)
+        print(f"Corpus built. Total {corpus_len:,} tokens (target {total:,})")
+        return corpus_len
+            
+    def split_corpus(self):
+        """Split corpus.bin into train/valid .bin"""
+        corpus = np.memmap(self.cfg.corpus_bin_path, dtype=np.uint16, mode="r")
+
+        train_tokens = int(self.cfg.train_split * self.cfg.total_token)
+        valid_tokens = int(self.cfg.valid_split * self.cfg.total_token)
+
+        corpus[:train_tokens].tofile(self.cfg.train_bin_path)
+        corpus[train_tokens:self.cfg.total_token].tofile(self.cfg.valid_bin_path)
+
+        print(f"Split: train {train_tokens:,}, valid {valid_tokens:,} tokens")   
+        
+    def check_corpus(self):
+        """Verify whether corpus already exist, if exists will skip tokenization"""
+        if os.path.exists(self.cfg.train_bin_path) and os.path.exists(self.cfg.valid_bin_path):
+            # already has train/valid split
+            print("Train/Validation corpus already exists, skipping...")
+            return
+        
+        elif os.path.exists(self.cfg.corpus_bin_path):
+            # no train/valid split but has full corpus
+            self.split_corpus()
+            
+        else:
+            # has none of the corpus
+            self.build_corpus()
+            self.split_corpus()
+        
+    def make_dataset(self) -> tuple[TokenDataset, TokenDataset]:
+        """Build train/validation datasets"""
+        train_ds = TokenDataset(path=self.cfg.train_bin_path, seq_len=self.cfg.seq_len, stride=self.cfg.stride)
+        valid_ds = TokenDataset(path=self.cfg.valid_bin_path, seq_len=self.cfg.seq_len, stride=self.cfg.stride, max_tokens=self.cfg.val_monitor_token)
+        return train_ds, valid_ds
+
+    def make_loader(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
+        """Build train/validation dataloader. Also handles DDP using DistributedSampler"""
+        train_ds, valid_ds = self.make_dataset()
+        world_size = int(os.environ.get("WORLD_SIZE", 1)) 
+        rank = int(os.environ.get("LOCAL_RANK", 0)) 
+        
+        if world_size > 1: # Have more than 1 GPU
+            train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+            shuffle = False
+        else:
+            train_sampler = None
+            shuffle = True
+            
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=self.cfg.batch_size,
+            shuffle=shuffle,
+            sampler=train_sampler,  # Use sampler to shuffle the data instead                
+            num_workers=self.cfg.num_workers,
+            pin_memory=self.cfg.pin_memory,
+            persistent_workers=self.cfg.persistent_workers and self.cfg.num_workers > 0,
+        )
     
-def make_dataset() -> tuple[TokenDataset, TokenDataset]:
-    """Build train/validation datasets"""
-    cfg = config.DataConfig()
-    train_ds = TokenDataset(path=cfg.train_bin_path,seq_len=cfg.seq_len, stride=cfg.stride)
-    valid_ds = TokenDataset(path=cfg.valid_bin_path, seq_len=cfg.seq_len, stride=cfg.stride)
-    return train_ds, valid_ds
-
-
+        valid_loader = DataLoader(
+            valid_ds,
+            batch_size=self.cfg.batch_size,
+            shuffle=False,                   
+            num_workers=self.cfg.num_workers,
+            pin_memory=self.cfg.pin_memory,
+            persistent_workers=self.cfg.persistent_workers and self.cfg.num_workers > 0,
+        )
+        print("Train/Validation DataLoader loaded")
+        return train_loader, valid_loader, train_sampler
+    
+    def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
+        """Make full pipeline. Only need to call this method"""
+        self.check_corpus()
+        return self.make_loader()
+        
+        
 if __name__ == "__main__":
     # Sanity check on all functions
-    import tiktoken
-
+    load_dotenv()
     # tokenize a sentence -> Dataset
-    tokenizer = tiktoken.get_encoding("p50k_base")
-    input_ids = tokenizer.encode("The cat was underperforming in Q2 so it was put on PIP")
-    arr = np.array(input_ids, dtype=np.uint16)
-    ds = TokenDataset.__new__(TokenDataset)   # bypass __init__ for the test...
-    print(arr, "\n")
+    # tokenizer = tiktoken.get_encoding("p50k_base")
+    # input_ids = tokenizer.encode("The cat was underperforming in Q2 so it was put on PIP")
+    # arr = np.array(input_ids, dtype=np.uint16)
+    # ds = TokenDataset.__new__(TokenDataset)   # bypass __init__ for the test...
+    # print(arr, "\n")
     
     # Load and tokenize test on full corpus
-    load_and_tokenize(tokenizer)
-    train, valid = make_dataset()
-    print(train.shape, valid.shape)
+    pipeline = DataPipeline(config.DataConfig)
+    train_loader, valid_loader = pipeline.make_pipeline()
+    
+    print(len(train_loader), len(valid_loader))

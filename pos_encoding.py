@@ -50,7 +50,7 @@ class FrequencyPE(nn.Module):
         pos_encodings = torch.cat((pos_encodings, pos_encodings), dim=-1) # [seq_len, embed_dim]
         return pos_encodings
     
-class RoPE:
+class RoPE(nn.Module):
     """Rotary positional encoding, LLaMa styled 
     Let x be query or key vector, split into two halves:
     u1 = dims [0, D/2],  u2 = dims [D/2, D]
@@ -66,9 +66,10 @@ class RoPE:
     Input/Output: [B, H, S, D] ->  [B, H, S, D]
     """
     def __init__(self, pos_enc: torch.Tensor):
+        super().__init__()
         # precompute cos, sin of pos_enc
-        self.cos_cache = pos_enc.cos()
-        self.sin_cache = pos_enc.sin()
+        self.register_buffer("cos_cache", pos_enc.cos())
+        self.register_buffer("sin_cache", pos_enc.sin())
         self.rotate_dim = pos_enc.shape[-1]
     
     def rotate(self, x: torch.Tensor) -> torch.Tensor:

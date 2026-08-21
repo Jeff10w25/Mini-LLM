@@ -2,6 +2,7 @@
 model.py
 """
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -9,6 +10,11 @@ import torch.nn.functional as F
 
 import config
 from pos_encoding import FrequencyPE, RoPE
+
+if TYPE_CHECKING:
+    # only read by your IDE/Type Checker, completely ignored at runtime
+    from torch import Tensor
+    from config import ModelConfig
 
 class MultiHeadAttention(nn.Module):
     """Causal Multi-headed causal self-attention with RoPE positional Encoding
@@ -19,7 +25,7 @@ class MultiHeadAttention(nn.Module):
         cfg (ModelConfig): Model hyperparameters (vocab_size, n_layers,
             n_heads, embed_dim, block_size, dropout)
     """
-    def __init__(self, pos_enc: torch.Tensor, seq_len: int, embed_dim: int, n_heads: int, dropout: float = 0.1, weights_out=False):
+    def __init__(self, pos_enc: Tensor, seq_len: int, embed_dim: int, n_heads: int, dropout: float = 0.1, weights_out=False):
         super().__init__()
         if embed_dim % n_heads != 0:
             raise ValueError("Embedded dimensions must be divisible by number of heads")
@@ -32,7 +38,7 @@ class MultiHeadAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def split_heads(self, X: torch.Tensor) -> torch.Tensor:
+    def split_heads(self, X: Tensor) -> Tensor:
         ''' reshape into separate n amount of heads
         [batch, seq_len, d_model] -> [batch, seq_len, h, d]
         [batch, seq_len, h, d] -> [batch, h, seq_len, d]'''
@@ -40,7 +46,7 @@ class MultiHeadAttention(nn.Module):
         X_transpose = X_viewed.transpose(-3, -2)
         return X_transpose
     
-    def merge_heads(self, X: torch.Tensor) -> torch.Tensor:
+    def merge_heads(self, X: Tensor) -> Tensor:
         '''Merge all heads back to original
         [batch, h, seq_len, d] -> [batch, seq_len, h, d]
         [batch, seq_len, h, d] -> [batch, seq_len, d_model]'''
@@ -48,7 +54,7 @@ class MultiHeadAttention(nn.Module):
         X_reshaped = X_transposed.reshape(*X_transposed.shape[:-2], self.h * self.d)
         return X_reshaped
 
-    def forward(self, X: torch.Tensor, padding_mask= None, causal_attn=True) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, X: Tensor, padding_mask= None, causal_attn=True) -> tuple[Tensor, Tensor]:
         qkv = self.qkv_proj(X)                   # [B, seq_len, d_model * 3]
         query, key, value = qkv.chunk(3, dim=-1) # [B, seq_len, d_model] each
         q = self.split_heads(query)
@@ -87,7 +93,7 @@ class SwiGLUFFN(nn.Module):
         self.down = nn.Linear(ff_dims, embed_dim, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
+    def forward(self, X: Tensor) -> Tensor:
         gate_up = self.gate_up(X)
         gate, up = gate_up.chunk(2, dim=-1)  # [B, seq_len, ff_dims] each
         gate = F.silu(gate)
@@ -118,7 +124,7 @@ class TransformerBlock(nn.Module):
         return X
         
         
-class SmolGPT(nn.Module):
+class MiniGPT(nn.Module):
     """Transformer decoder block: 
         
     Input/Output: idx [B, T] → logits [B, T, vocab_size].
@@ -127,7 +133,7 @@ class SmolGPT(nn.Module):
         cfg (ModelConfig): Model hyperparameters (vocab_size, n_layers,
             n_heads, embed_dim, block_size, dropout)
     """
-    def __init__(self, cfg: config.ModelConfig):
+    def __init__(self, cfg: ModelConfig):
         super().__init__()
         pos = FrequencyPE(cfg.embed_dim // cfg.n_heads)
         pos_enc = pos(cfg.seq_len)
@@ -156,7 +162,7 @@ class SmolGPT(nn.Module):
     
 if __name__ == "__main__":
     cfg = config.ModelConfig()
-    model = SmolGPT(cfg)
+    model = MiniGPT(cfg)
     tied = id(model.embed.weight) == id(model.output.weight)
     print("Tied Embed and LM head weights =", tied)   # → True if tied correctly, on the same memory address
     total_params = sum(p.numel() for p in set(model.parameters()))
