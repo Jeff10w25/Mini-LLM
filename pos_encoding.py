@@ -1,19 +1,37 @@
 """pos_encoding.py — various positional encoding.
 """
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
+if TYPE_CHECKING:
+    # only read by your IDE/Type Checker, completely ignored at runtime
+    from torch import Tensor
+
 class SinusoidalPE(nn.Module):
-    """Sinusoidal positional encoding based on the paper `Attention is all you need` where
+    """Sinusoidal positional encoding based on the paper `Attention is all you need`
+    
+    Pre-computes a fixed [max_len, embed_dim] table of sin/cos positional embeddings:
         PE(p, 2i)   = sin(p/(10000^(2i/d))) , for even index in embeddings
         PE(p, 2i+1) = cos(p/(10000^(2i/d))) , for odd index in embeddings
         i = d/2 , dimension / 2
     
-    Input/Output: [B, seq_len, embed_dim] ->  [seq_len, embed_dim]
+    Args:
+        max_len: Max sequence length to support
+        embed_dim: Hidden dimension
+        dropout: Dropout probability
+        n: Base frequency (default to 10,000)
     """
-    def __init__(self, max_len: int, embed_dim: int, dropout: float = 0.1, n: int = 10_000):
+    def __init__(
+        self, 
+        max_len: int, 
+        embed_dim: int, 
+        dropout: float = 0.1, 
+        n: int = 10_000
+        ):
+        
         super().__init__()
         pos_encodings = torch.empty(max_len, embed_dim) # [max_len, embed_dim]
         pos = torch.arange(max_len).unsqueeze(1) # [max_len, 1]
@@ -24,17 +42,20 @@ class SinusoidalPE(nn.Module):
         self.register_buffer("pos_encodings", pos_encodings)
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
+    def forward(self, X: Tensor) -> Tensor:
         # Return only positional encoding upto seq_len of X
         return self.dropout(self.pos_encodings[:X.size(-2)])
     
 class FrequencyPE(nn.Module):
-    """ Frequency positional encoding encodes position as inverse frequencies, 
-    which will be used to compute and apply RoPE. The output is the angle of each positions.
+    """Inverse-frequency positional encoding used to build RoPE angles, LLaMa styled
+        
+    Computes inverse frequencies then produces the per-position angle
         Inverse_freq = 10000^(-2(i-1)/dim), i = 1, 2, ... embed_dim // 2
         Pos_encoding = p * inverse_freq, p = 0, 1, ... seq_len - 1
     
-    Input/Output: [seq_len, ] ->  [seq_len, embed_dim]
+    Args:
+        embed_dim (int): Hidden dimension (produces embed_dim//2 frequencies,
+        doubled by concatenation)
     """
     def __init__(self, embed_dim: int):
         super().__init__()
@@ -42,7 +63,7 @@ class FrequencyPE(nn.Module):
         inv_freq = 1.0 / (10000 ** (torch.arange(0, embed_dim, 2).float() / embed_dim))
         self.register_buffer('inv_freq', inv_freq)
     
-    def forward(self, seq_len: int) -> torch.Tensor:
+    def forward(self, seq_len: int) -> Tensor:
         pos = torch.arange(seq_len)  # [seq_len, ]
         # frequency positional encoding (outer product of pos and inv_freq)
         pos_encodings = torch.outer(pos, self.inv_freq) # [seq_len, embed_dim/2]
@@ -52,7 +73,8 @@ class FrequencyPE(nn.Module):
     
 class RoPE(nn.Module):
     """Rotary positional encoding, LLaMa styled 
-    Let x be query or key vector, split into two halves:
+    
+    Let X be query or key vector, split into two halves:
     u1 = dims [0, D/2],  u2 = dims [D/2, D]
     Each dim m of u1 pairs with dim m of u2, sharing angle θ_m: 
     
@@ -60,27 +82,28 @@ class RoPE(nn.Module):
         [u2']   [ u1·sin(θ1) + u2·cos(θ1) ]
     
     Vectorized form (rotate_half = swap each pair's elements, negate the first):
-        x_rot = x · cos(θ)  +  rotate_half(x) · sin(θ)
-        rotate_half(x) = [-u2, u1]  , e.g. [-e,-f,-g,-h, a, b, c, d] for D=8
+        X_rot = X · cos(θ)  +  rotate_half(X) · sin(θ)
+        rotate_half(X) = [-u2, u1]  , e.g. [-e,-f,-g,-h, a, b, c, d] for D=8
         
-    Input/Output: [B, H, S, D] ->  [B, H, S, D]
+    Args:
+        pos_enc: Frequency positional encoding [seq_len, d_head]
     """
-    def __init__(self, pos_enc: torch.Tensor):
+    def __init__(self, pos_enc: Tensor):
         super().__init__()
         # precompute cos, sin of pos_enc
         self.register_buffer("cos_cache", pos_enc.cos())
         self.register_buffer("sin_cache", pos_enc.sin())
         self.rotate_dim = pos_enc.shape[-1]
     
-    def rotate(self, x: torch.Tensor) -> torch.Tensor:
-        # only use value up to seq_len of x
-        cos, sin = self.cos_cache[:x.shape[-2]], self.sin_cache[:x.shape[-2]]
-        rot_x = x * cos + self._rotate_half(x) * sin
-        return rot_x
+    def rotate(self, X: Tensor) -> Tensor:
+        # only use value up to seq_len of X
+        cos, sin = self.cos_cache[:X.shape[-2]], self.sin_cache[:X.shape[-2]]
+        rot_X = X * cos + self._rotate_half(X) * sin
+        return rot_X
         
     @staticmethod
-    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
-        u1, u2 = torch.chunk(x, 2, dim=-1) # u1: [B, H, S, D//2], u2: [B, H, S, D//2]
+    def _rotate_half(X: Tensor) -> Tensor:
+        u1, u2 = torch.chunk(X, 2, dim=-1) # u1: [B, H, S, D//2], u2: [B, H, S, D//2]
         return torch.cat((-u2, u1), dim=-1) # -> [B, H, S, D]
     
 

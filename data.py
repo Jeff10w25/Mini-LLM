@@ -20,21 +20,31 @@ if TYPE_CHECKING:
     from datasets import IterableDataset
     from config import DataConfig
 
+def r0print(*args, **kwargs):
+    """Print only from rank 0 (1xGPU or CPU prints normally)"""
+    if int(os.environ.get("LOCAL_RANK", 0)) == 0:
+        print(*args, **kwargs) 
 class TokenDataset(Dataset):
-    """
-    TokenDataset takes fully tokenized corpus using np.memmap to prevent writing full corpus to memory. 
-    Then returns target, shifted right by 1 token. This is used to do next token prediction.
+    """TokenDataset for DataLoader
     
-    Input/Output: __getitem__(idx) -> (X[idx], y[idx])
+    Takes fully tokenized corpus using np.memmap to prevent writing full corpus to memory. 
+    Then returns target, shifted right by 1 token. This is used to do next token prediction.
         
-    Attributes:
-        path (str): Fully tokenized corpus path. E.g. /data/corpus.bin
-        window_len (int): The context size that will be fed to the model.
-        stride (int): How far apart __getitem__ will sample the next idx. Defaults to seq_len.
-                    Stride < seq_len is only use to grow the corpus if there isn't enough data.
-                    Or if the data download from HuggingFace is a bottleneck.
+    Args:
+        path: Fully tokenized corpus path. E.g. /data/corpus.bin
+        window_len: The context size that will be fed to the model
+        stride: How far apart __getitem__ will sample the next idx. Defaults to seq_len.
+                Stride < seq_len is only use to grow the corpus if there isn't enough data.
+                Or if the data download from HuggingFace is a bottleneck.
     """
-    def __init__(self, path: str, seq_len: int, stride: int = None, max_tokens: int = None):
+    def __init__(
+        self, 
+        path: str, 
+        seq_len: int, 
+        stride: int | None = None, 
+        max_tokens: int | None = None
+        ):
+        
         self.token = np.memmap(path, dtype=np.uint16, mode="r+") 
         self.seq_len = seq_len
         self.stride = seq_len if stride is None else stride
@@ -54,32 +64,38 @@ class TokenDataset(Dataset):
         return X, y
 
 class DataPipeline:
-    """
-    DataPipeline builds the tokenized corpus from HuggingFace (streaming) into
-    compact uint16 .bin files, then assembles train/validation DataLoaders.
-    The corpus is built once and reused across sessions (skipped if it exists).
+    """DataPipeline to prepare data for training
+    
+    Builds the tokenized corpus from HuggingFace via streaming into
+    compact uint16 .bin files, then create train/validation DataLoaders and train_sampler.
+    The corpus is built once and reused across sessions (skip tokenization if they already exist).
 
-    Input/Output: make_pipeline() -> (train_loader, valid_loader)
-
+    Tiktoken tokenizer is used for tokenization.
+    (r50k_base → n_vocab ≈ 50257) 
+    
     Attributes:
-        cfg (DataConfig): Data hyperparameters (data_source, paths, token
-                    budgets, chunk_size, seq_len, stride).
-        tokenizer (Encoding): tiktoken encoder used for tokenization.
-                    (r50k_base → n_vocab ≈ 50257) 
+        cfg (DataConfig): Data hyperparameters.
     """
     def __init__(self, cfg: DataConfig):
         self.cfg = cfg
         self.tokenizer = tiktoken.get_encoding("r50k_base")
 
-    def batch_tokenize(self, stream: IterableDataset, out_path: str, max_token: int, chunk_size: int) -> int:
+    def batch_tokenize(
+        self, 
+        stream: IterableDataset, 
+        out_path: str, 
+        max_token: int, 
+        chunk_size: int
+        ) -> int:
         """Tokenize corpus in chunk"""
         assert self.tokenizer.n_vocab <= 65535 # check that vocab_size is smaller than uint16
         
         total_token = 0
         buffer = []
+        r0print("Starting tokenization...")
         with open(out_path, "wb") as f:
-            for batch in stream.iter(batch_size=10000):
-                encoded = self.tokenizer.encode_batch(batch["text"])
+            for batch in stream.iter(batch_size=1000):
+                encoded = self.tokenizer.encode_batch(batch["text"], allowed_special="<|endoftext|>")
                 
                 for ids in encoded:
                     """flatten the doc and append EOS token to the end each document
@@ -97,7 +113,7 @@ class DataPipeline:
                 if len(buffer) >= chunk_size:       # normal buffer, saves data once it reach desires chunk size
                     total_token += len(buffer)
                     np.asarray(buffer, dtype=np.uint16).tofile(f)
-                    print(f"Accumulated tokens: {total_token:,}/{max_token:,}")
+                    r0print(f"Accumulated tokens: {total_token:,}/{max_token:,}")
                     buffer.clear() # reset buffer size to 0
 
         return total_token
@@ -113,36 +129,46 @@ class DataPipeline:
         )
         total = self.cfg.total_token
         corpus_len = self.batch_tokenize(stream, self.cfg.corpus_bin_path, total, self.cfg.chunk_size)
-        print(f"Corpus built. Total {corpus_len:,} tokens (target {total:,})")
+        r0print(f"Corpus built. Total {corpus_len:,} tokens (target {total:,})")
         return corpus_len
             
     def split_corpus(self):
         """Split corpus.bin into train/valid .bin"""
         corpus = np.memmap(self.cfg.corpus_bin_path, dtype=np.uint16, mode="r")
-
         train_tokens = int(self.cfg.train_split * self.cfg.total_token)
         valid_tokens = int(self.cfg.valid_split * self.cfg.total_token)
-
-        corpus[:train_tokens].tofile(self.cfg.train_bin_path)
-        corpus[train_tokens:self.cfg.total_token].tofile(self.cfg.valid_bin_path)
-
-        print(f"Split: train {train_tokens:,}, valid {valid_tokens:,} tokens")   
+        corpus[:train_tokens].tofile(self.cfg.train_bin_path) # first n tokens to train
+        corpus[train_tokens:self.cfg.total_token].tofile(self.cfg.valid_bin_path) # the rest to valid
+        r0print(f"Split: train {train_tokens:,}, valid {valid_tokens:,} tokens")   
         
-    def check_corpus(self):
+    def check_corpus_exist(self):
         """Verify whether corpus already exist, if exists will skip tokenization"""
         if os.path.exists(self.cfg.train_bin_path) and os.path.exists(self.cfg.valid_bin_path):
             # already has train/valid split
-            print("Train/Validation corpus already exists, skipping...")
+            r0print("Train/Validation corpus already exists, skipping...")
             return
-        
         elif os.path.exists(self.cfg.corpus_bin_path):
             # no train/valid split but has full corpus
             self.split_corpus()
-            
         else:
             # has none of the corpus
             self.build_corpus()
             self.split_corpus()
+            
+    @staticmethod
+    def check_corpus_size(bin_path: str, expected: int):
+        """Verify that corpus token size match the expected token"""
+        num_tokens = os.path.getsize(bin_path) // 2  # uint16 = 2 bytes/token
+        diff = 100 * abs(num_tokens - expected) / expected
+        ok = diff < 1 # acceptable < 1% token mismatch
+        msg = f"{bin_path}: {num_tokens:,} tokens (expected {expected:,}, diff {diff:.2f}%)"
+        print(f"{msg} -> {'OK' if ok else 'MISMATCH'}")
+
+    def _verify_sizes(self):
+        total = self.cfg.total_token
+        train = int(self.cfg.train_split * total)
+        self.check_corpus_size(self.cfg.train_bin_path, train)
+        self.check_corpus_size(self.cfg.valid_bin_path, total - train)
         
     def make_dataset(self) -> tuple[TokenDataset, TokenDataset]:
         """Build train/validation datasets"""
@@ -181,14 +207,14 @@ class DataPipeline:
             pin_memory=self.cfg.pin_memory,
             persistent_workers=self.cfg.persistent_workers and self.cfg.num_workers > 0,
         )
-        print("Train/Validation DataLoader loaded")
+        r0print("Train/Validation DataLoader loaded")
         return train_loader, valid_loader, train_sampler
     
     def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
         """Make full pipeline. Only need to call this method"""
-        self.check_corpus()
+        self.check_corpus_exist()
+        self._verify_sizes()
         return self.make_loader()
-        
         
 if __name__ == "__main__":
     # Sanity check on all functions

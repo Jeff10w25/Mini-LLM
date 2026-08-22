@@ -17,15 +17,29 @@ if TYPE_CHECKING:
     from config import ModelConfig
 
 class MultiHeadAttention(nn.Module):
-    """Causal Multi-headed causal self-attention with RoPE positional Encoding
-    
-    Input/Output idx [B, T] → logits [B, T, vocab_size].
-    
+    """Causal multi-head self-attention with RoPE positional encoding.
+
+    Fused QKV projection, then split into heads, apply RoPE rotation, and
+    compute scaled dot product attention with a causal mask.
+
     Args:
-        cfg (ModelConfig): Model hyperparameters (vocab_size, n_layers,
-            n_heads, embed_dim, block_size, dropout)
+        pos_enc: Frequency positional encoding [seq_len, d_head]
+        seq_len: Max sequence length
+        embed_dim: Hidden dimension
+        n_heads: Number of attention heads
+        dropout: Dropout probability
+        weights_out: If True, return (output, attention_weights) else return output
     """
-    def __init__(self, pos_enc: Tensor, seq_len: int, embed_dim: int, n_heads: int, dropout: float = 0.1, weights_out=False):
+    def __init__(
+        self, 
+        pos_enc: Tensor, 
+        seq_len: int, 
+        embed_dim: int, 
+        n_heads: int, 
+        dropout: float = 0.1, 
+        weights_out=False
+        ):
+        
         super().__init__()
         if embed_dim % n_heads != 0:
             raise ValueError("Embedded dimensions must be divisible by number of heads")
@@ -39,22 +53,28 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def split_heads(self, X: Tensor) -> Tensor:
-        ''' reshape into separate n amount of heads
+        """Reshape into separate n amount of heads
         [batch, seq_len, d_model] -> [batch, seq_len, h, d]
-        [batch, seq_len, h, d] -> [batch, h, seq_len, d]'''
+        [batch, seq_len, h, d] -> [batch, h, seq_len, d]"""
         X_viewed = X.view(*X.shape[:-1], self.h, self.d)
         X_transpose = X_viewed.transpose(-3, -2)
         return X_transpose
     
     def merge_heads(self, X: Tensor) -> Tensor:
-        '''Merge all heads back to original
+        """Merge all heads back to original
         [batch, h, seq_len, d] -> [batch, seq_len, h, d]
-        [batch, seq_len, h, d] -> [batch, seq_len, d_model]'''
+        [batch, seq_len, h, d] -> [batch, seq_len, d_model]"""
         X_transposed = X.transpose(-3, -2)
         X_reshaped = X_transposed.reshape(*X_transposed.shape[:-2], self.h * self.d)
         return X_reshaped
 
-    def forward(self, X: Tensor, padding_mask= None, causal_attn=True) -> tuple[Tensor, Tensor]:
+    def forward(
+        self, 
+        X: Tensor, 
+        padding_mask: Tensor | None = None, 
+        causal_attn: bool = True
+        ) -> Tensor | tuple[Tensor, Tensor]:
+        
         qkv = self.qkv_proj(X)                   # [B, seq_len, d_model * 3]
         query, key, value = qkv.chunk(3, dim=-1) # [B, seq_len, d_model] each
         q = self.split_heads(query)
@@ -74,18 +94,20 @@ class MultiHeadAttention(nn.Module):
         weights = torch.softmax(scores / (self.d ** 0.5), dim=-1)
         Z = self.dropout(weights) @ v
         output = self.out_proj(self.merge_heads(Z))
-        if self.weights_out: # If want to see the weights otherwise just returns output
+        if self.weights_out: # if need weights, otherwise just returns output
             return (output, weights)
         return output
     
 class SwiGLUFFN(nn.Module):
-    """Feed-Forward layer with SiLU activation function
-
-    Input/Output idx [B, T] → logits [B, T, vocab_size].
+    """SwiGLU feed-forward, SiLU-gated two-path MLP with a fused gate+up projection
+    
+    Applies  down(SiLU(x @ W_gate) * (x @ W_up))  using a single fused
+    gate+up projection and one down projection
 
     Args:
-        cfg (ModelConfig): Model hyperparameters (vocab_size, n_layers,
-            n_heads, embed_dim, block_size, dropout)
+        embed_dim: Hidden dimension
+        ff_dims: Expansion dimension inside FFN
+        dropout: Dropout probability
     """
     def __init__(self, embed_dim: int, ff_dims: int, dropout: float = 0.1):
         super().__init__()
@@ -100,17 +122,31 @@ class SwiGLUFFN(nn.Module):
         return self.dropout(self.down(gate * up)) # [B, seq_len, embed_dim]
 
 class TransformerBlock(nn.Module):
-    """Transformer decoder block: 
+    """Pre-norm decoder block, residual self-attention + SwiGLU FFN
     
-    Input/Output: idx [B, T] → logits [B, T, vocab_size].
-    
+    Applies the pre-RMSNorm residual pattern:
+        X = X + Attn(RMSNorm1(X))
+        X = X + FFN(RMSNorm2(X))
+        
     Args:
-        cfg (ModelConfig): Model hyperparameters (vocab_size, n_layers,
-            n_heads, embed_dim, block_size, dropout)
+        pos_enc: Frequency positional encoding [seq_len, d_head]
+        seq_len: Max sequence length 
+        embed_dim: Hidden dimension
+        n_heads: Number of attention heads
+        dropout: Dropout probability
     """
-    def __init__(self, pos_enc, seq_len, embed_dim, n_heads, dropout: float = 0.1):
+    def __init__(
+        self, 
+        pos_enc: Tensor, 
+        seq_len: int, 
+        embed_dim: int, 
+        n_heads: int, 
+        dropout: float = 0.1
+        ):
+        
         super().__init__()
-        # Optimal SwiGLU expansion ratio is around 2.67. Compute in integer math only to avoid floating point precision.
+        # Optimal SwiGLU expansion ratio is around 2.67. 
+        # Compute in integer math only to avoid floating point precision.
         # And also make sure to expand to value that is divisible by 64 for hardware optimization
         ff_dim = (8 * embed_dim) // 3 // 64 * 64  
         self.attn = MultiHeadAttention(pos_enc, seq_len, embed_dim, n_heads, dropout)
@@ -118,20 +154,20 @@ class TransformerBlock(nn.Module):
         self.norm1 = nn.RMSNorm(embed_dim)
         self.norm2 = nn.RMSNorm(embed_dim)
         
-    def forward(self, X, padding_mask=None):
+    def forward(self, X: Tensor, padding_mask: Tensor | None = None) -> Tensor:
         X = X + self.attn(self.norm1(X), padding_mask)   # only select attn without weights
         X = X + self.ffn(self.norm2(X))
         return X
         
         
 class MiniGPT(nn.Module):
-    """Transformer decoder block: 
-        
-    Input/Output: idx [B, T] → logits [B, T, vocab_size].
-        
+    """Causal decoder-transformer block
+
+    Embeds token ids, passes through n_layers transformer blocks, applies
+    a final RMSNorm, and projects to vocab logits with a tied weight head
+
     Args:
-        cfg (ModelConfig): Model hyperparameters (vocab_size, n_layers,
-            n_heads, embed_dim, block_size, dropout)
+        cfg (ModelConfig): Model hyperparameters.
     """
     def __init__(self, cfg: ModelConfig):
         super().__init__()
@@ -152,8 +188,19 @@ class MiniGPT(nn.Module):
         self.norm = nn.RMSNorm(cfg.embed_dim)
         self.output = nn.Linear(cfg.embed_dim, cfg.vocab_size, bias=False)  # bias=False to share weights
         self.output.weight = self.embed.weight  # tying the lm head weights to the embedding weights
+        self.apply(self._init_weights)
 
-    def forward(self, input_ids):
+    @staticmethod
+    def _init_weights(module: nn.Module) -> None:
+        """Init weight to std=0.02 to prevent the loss from starting too high"""
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, 0.0, 0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, 0.0, 0.02)
+            
+    def forward(self, input_ids: Tensor) -> Tensor:
         text_embeds = self.embed(input_ids)
         for layer in self.layers:
             text_embeds = layer(text_embeds)

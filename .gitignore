@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+smol-llm.zip
 data/
 samples/
 checkpoints/

@@ -30,8 +30,8 @@ class DataConfig:
     train_bin_path: str     = "data/train_corpus.bin"
     valid_bin_path: str     = "data/valid_corpus.bin"
     total_token: int        = 100_000_000
-    chunk_size: int         = 1_000_000  # Tokenization chunking so it can fit in RAM
-    val_monitor_token: int  = 100_000
+    chunk_size: int         = 10_000_000  # tokenization chunking so it can fit in RAM
+    val_monitor_token: int  = 100_000  # token used for eval during training
     train_split: float      = 0.95
     valid_split: float      = 0.05  # 5% of total tokens for validation
     batch_size: int         = 16 # 32
@@ -54,6 +54,7 @@ PRESETS = {
         "data": dict(
             data_source_name="sample-10BT",
             total_token=20_000_000,
+            chunk_size= 10_000_000,
             batch_size=16,
             seq_len=128,
             stride=128,
@@ -69,7 +70,7 @@ PRESETS = {
             ckpt_dir="checkpoints/smoke/",
         ),
     },
-    "mini-90M": {
+    "mini-91M": {
         "model": dict(
             vocab_size=50257, 
             embed_dim=640, 
@@ -80,6 +81,7 @@ PRESETS = {
         "data": dict(
             data_source_name="sample-10BT",
             total_token=2_000_000_000,
+            chunk_size= 100_000_000,
             batch_size=48,
             seq_len=1024,
             stride=1024,

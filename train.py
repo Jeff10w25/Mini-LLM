@@ -1,6 +1,9 @@
 """
 train.py
 """
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
 import math
 import os
 import time
@@ -8,11 +11,41 @@ import torch
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 import config
 
+if TYPE_CHECKING:
+    # only read by your IDE/Type Checker, completely ignored at runtime
+    from torch import Tensor, nn
+    from torch.utils.data.distributed import DistributedSampler
+    from datasets import DataLoader
+    from config import TrainConfig
+
+def r0print(*args, **kwargs):
+    """Print only from rank 0 (1xGPU or CPU prints normally)"""
+    if int(os.environ.get("LOCAL_RANK", 0)) == 0:
+        print(*args, **kwargs) 
 class Trainer:
-    def __init__(self, model, cfg: config.TrainConfig, train_loader , val_loader, train_sampler):
+    """Trainer with AMP, resume, eval, and optional DDP
+
+    Moves the model to the device, wraps it in DDP when world_size > 1, and
+    manages the optimizer, LR scheduler, GradScaler, and checkpointing
+    Handles CPU / single-GPU / multi-GPU DDP automatically
+
+    Args:
+        model: The model to train
+        cfg: Training hyperparameters (device, lr, max_iters, eval_every, ckpt_dir)
+        train_loader: Training batches (already sharded for DDP)
+        val_loader: Validation batches (shuffle=False)
+        train_sampler: Train sampler for set_epoch on restart (None when not using DDP)
+    """
+    def __init__(
+        self, 
+        model: nn.Module, 
+        cfg: TrainConfig, 
+        train_loader: DataLoader, 
+        val_loader: DataLoader, 
+        train_sampler: DistributedSampler | None
+        ):
         gpu_id = int(os.environ.get("LOCAL_RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.is_cuda = torch.cuda.is_available()
@@ -48,7 +81,7 @@ class Trainer:
         }
         
     @torch.no_grad()
-    def evaluate(self, loader) -> tuple[float, float, float]:
+    def evaluate(self, loader: DataLoader) -> tuple[float, float]:
         """Return (avg_loss, perplexity) over the whole loader.
 
         Uses reduction="sum" + manual division so the average is exact
@@ -73,7 +106,7 @@ class Trainer:
         ppl = math.exp(avg_loss)  # perplexity loss
         return avg_loss, ppl
     
-    def _raw_model(self):
+    def _raw_model(self) -> nn.Module:
         """Unwrap DDP (.module) and torch.compile (_orig_mod) for save/load checkpoint
         Handles all combinations, CPU, GPU, GPU+DDP, GPU+DDP+torch.compile
         """
@@ -81,7 +114,11 @@ class Trainer:
         model = getattr(model, "_orig_mod", model)
         return model
     
-    def save_checkpoint(self, step):
+    def save_checkpoint(self, step: int):
+        """Save model, optimizer, scheduler, scaler, step, config, and history.
+        Writes the unwrapped model's state_dict so checkpoints are
+        portable across DDP/compile. Creates the checkpoint dir if missing.
+        """
         os.makedirs(self.cfg.ckpt_dir, exist_ok=True)
         torch.save({
             "model": self._raw_model().state_dict(), # save 
@@ -93,7 +130,10 @@ class Trainer:
             "history": self.history
         }, f"{self.cfg.ckpt_dir}/step_{step}.pt")
         
-    def load_checkpoint(self, path):
+    def load_checkpoint(self, path: str) -> int:
+        """Load a checkpoint (weights, optimizer, scheduler, scaler, history).
+        Returns the step it was saved at, so training resumes from there.
+        """
         ckpt_dict = torch.load(path, weights_only=False, map_location=self.device)
         self._raw_model().load_state_dict(ckpt_dict["model"], strict=False)
         self.optimizer.load_state_dict(ckpt_dict["optimizer"])
@@ -103,12 +143,14 @@ class Trainer:
         self.history = ckpt_dict["history"]
         return ckpt_dict["step"]
         
-    def train_step(self, batch): 
+    def train_step(self, batch: tuple[Tensor, Tensor]) -> float: 
+        """Run one forward/backward/optimizer step on a batch, returning the loss.
+        Uses fp16 autocast + GradScaler on GPU, plain fp32 on CPU
+        """
         X, y = batch
         X, y = X.to(self.device), y.to(self.device)
         self.optimizer.zero_grad()
         
-        # use autocast to fp16 if run on GPU
         if self.is_cuda:
             with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                 logits = self.model(X)
@@ -126,30 +168,37 @@ class Trainer:
         self.scheduler.step()
         return loss.item()
 
-    def train(self, resume_path=None):
+    def train(self, resume_path: str | None = None) -> dict:
+        """Run the training loop for max_iters steps, eval and save on eval_every.
+
+        Optionally resumes from a checkpoint. Restarts the data iterator on
+        StopIteration (calling set_epoch when a sampler is present). Eval and
+        checkpointing run only on rank 0. Returns the history dict. Eval and save
+        is also timed using t1-t0.
+        """
         if resume_path is not None:
             try:
-                print("Loading from checkpoint...")
+                r0print("Loading from checkpoint...")
                 start = self.load_checkpoint(resume_path) 
-                print("Checkpoint loaded")
+                r0print("Checkpoint loaded")
             except FileNotFoundError:
-                print(f"Checkpoint path doesn't exist. Got {resume_path}")      
+                r0print(f"Checkpoint path doesn't exist. Got {resume_path}")      
         else: 
             start = 0
-        #     
-        if self.train_sampler is not None:
-            epoch = step // len(self.train_sampler)
-            self.train_sampler.set_epoch(epoch)
             
         self.data_iter = iter(self.train_loader) # make iterable 
         self.model.train()
-        print(f"Start Training on {self.device}...")
+        print(f"Start Training on {self.device}...\n") # print on all rank available
+        
         t0 = time.time() # t0
         for step in range(start + 1, self.cfg.max_iters + 1):
             try:
                 batch = next(self.data_iter)
             except StopIteration:
                 self.data_iter = iter(self.train_loader)
+                if self.train_sampler is not None:
+                    # tells what shuffle sampler will use in case of training many epochs, set epoch only on restart
+                    self.train_sampler.set_epoch(step // len(self.train_sampler))  
                 batch = next(self.data_iter)  
             loss = self.train_step(batch) 
             self.history["step"].append(step)
@@ -175,7 +224,7 @@ if __name__ == '__main__':
     pipeline = data.DataPipeline(config.DataConfig())
     train_loader, valid_loader, train_sampler = pipeline.make_pipeline()
     
-    model = model.SmolGPT(config.ModelConfig())
+    model = model.MiniGPT(config.ModelConfig())
     if torch.cuda.is_available():
         model = torch.compile(model)    
     trainer = Trainer(model, config.TrainConfig(), train_loader, valid_loader, train_sampler)
