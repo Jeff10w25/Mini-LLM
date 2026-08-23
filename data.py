@@ -1,4 +1,4 @@
-"""data.py — token arrays, TokenDataset, and dataset construction."""
+"""data.py - token arrays, TokenDataset, and dataset construction."""
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
@@ -13,6 +13,7 @@ from datasets import load_dataset
 from dotenv import load_dotenv
 
 import config
+from utils import r0print
 
 if TYPE_CHECKING:
     # only read by your IDE/Type Checker, completely ignored at runtime
@@ -20,10 +21,8 @@ if TYPE_CHECKING:
     from datasets import IterableDataset
     from config import DataConfig
 
-def r0print(*args, **kwargs):
-    """Print only from rank 0 (1xGPU or CPU prints normally)"""
-    if int(os.environ.get("LOCAL_RANK", 0)) == 0:
-        print(*args, **kwargs) 
+if not os.environ.get("HF_TOKEN"):
+    load_dotenv()
 class TokenDataset(Dataset):
     """TokenDataset for DataLoader
     
@@ -95,7 +94,7 @@ class DataPipeline:
         r0print("Starting tokenization...")
         with open(out_path, "wb") as f:
             for batch in stream.iter(batch_size=1000):
-                encoded = self.tokenizer.encode_batch(batch["text"], allowed_special="<|endoftext|>")
+                encoded = self.tokenizer.encode_batch(batch["text"], allowed_special={"<|endoftext|>"})
                 
                 for ids in encoded:
                     """flatten the doc and append EOS token to the end each document
@@ -162,7 +161,7 @@ class DataPipeline:
         diff = 100 * abs(num_tokens - expected) / expected
         ok = diff < 1 # acceptable < 1% token mismatch
         msg = f"{bin_path}: {num_tokens:,} tokens (expected {expected:,}, diff {diff:.2f}%)"
-        print(f"{msg} -> {'OK' if ok else 'MISMATCH'}")
+        r0print(f"{msg} -> {'OK' if ok else 'MISMATCH'}")
 
     def _verify_sizes(self):
         total = self.cfg.total_token

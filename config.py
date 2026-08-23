@@ -1,5 +1,5 @@
 """
-config.py provides 
+config.py - dataclass configs for model/train/data plus the PRESETS presets.
 """
 from __future__ import annotations   
 from dataclasses import dataclass 
@@ -17,7 +17,7 @@ class TrainConfig:
     device: str     = "cuda"
     seed: int       = 42
     lr: float       = 3e-4
-    grad_accum: int = 4
+    grad_accum: int = 4 
     max_iters: int  = 20000
     eval_every: int = 500
     ckpt_dir: str   = "checkpoints/"  # for checkpointing in Kaggle
@@ -54,7 +54,7 @@ PRESETS = {
         "data": dict(
             data_source_name="sample-10BT",
             total_token=20_000_000,
-            chunk_size= 10_000_000,
+            chunk_size=10_000_000,
             batch_size=16,
             seq_len=128,
             stride=128,
@@ -66,11 +66,12 @@ PRESETS = {
         "train": dict(
             lr=3e-4,
             max_iters=500,
+            grad_accum=4,
             eval_every=50,
             ckpt_dir="checkpoints/smoke/",
         ),
     },
-    "mini-91M": {
+    "mini-90M": {
         "model": dict(
             vocab_size=50257, 
             embed_dim=640, 
@@ -81,18 +82,19 @@ PRESETS = {
         "data": dict(
             data_source_name="sample-10BT",
             total_token=2_000_000_000,
-            chunk_size= 100_000_000,
-            batch_size=48,
+            chunk_size=100_000_000,
+            batch_size=16,
             seq_len=1024,
             stride=1024,
             val_monitor_token=1_000_000,
-            num_workers=4,
+            num_workers=8,
             pin_memory=True,
             persistent_workers=True,
         ),
         "train": dict(
             lr=3e-4,
-            max_iters=40_000,
+            max_iters=30_000,
+            grad_accum= 4,
             eval_every=500,
             ckpt_dir="checkpoints/mini/",
         ),

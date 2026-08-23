@@ -1,5 +1,5 @@
 """
-model.py
+model.py - MiniGPT: causal decoder-transformer with RoPE, SwiGLU FFN, tied embeddings.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING

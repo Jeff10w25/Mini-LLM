@@ -1,4 +1,5 @@
-"""pos_encoding.py — various positional encoding.
+"""
+pos_encoding.py — various positional encoding.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING
