@@ -8,8 +8,8 @@ import math
 import os
 import time
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
-import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 import config
 from utils import r0print, save_json
@@ -35,6 +35,7 @@ class Trainer:
         train_loader: Training batches (already sharded for DDP)
         val_loader: Validation batches (shuffle=False)
         train_sampler: Train sampler for set_epoch on restart (None when not using DDP)
+        valid_sampler: Valid sampler (None when not using DDP)
     """
     def __init__(
         self, 
@@ -42,11 +43,12 @@ class Trainer:
         cfg: TrainConfig, 
         train_loader: DataLoader, 
         val_loader: DataLoader, 
-        train_sampler: DistributedSampler | None
+        train_sampler: DistributedSampler | None,
+        valid_sampler: DistributedSampler | None
         ):
         
         gpu_id = int(os.environ.get("LOCAL_RANK", 0))
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.is_cuda = torch.cuda.is_available()
         self.gpu_id = gpu_id
         self.device = f"cuda:{gpu_id}" if self.is_cuda else "cpu"
@@ -55,11 +57,11 @@ class Trainer:
         model = getattr(model, "_orig_mod", model).to(self.device)
         
         # only wrap in DDP if using more than 1 GPU
-        if self.is_cuda and world_size > 1:
+        if self.is_cuda and self.world_size > 1:
             self.model = DDP(model, device_ids=[self.gpu_id])
             self.scaler = torch.amp.GradScaler()
         # use 1 GPU
-        elif self.is_cuda and world_size == 1:
+        elif self.is_cuda and self.world_size == 1:
             self.model = model
             self.scaler = torch.amp.GradScaler()
         # use CPU
@@ -69,6 +71,7 @@ class Trainer:
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, fused=self.is_cuda)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=cfg.max_iters)
         self.train_sampler = train_sampler
+        self.valid_sampler = valid_sampler
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.history = {
@@ -99,9 +102,13 @@ class Trainer:
             )
             total_loss += loss.item()
             total_tokens += y.numel()
-
+        if self.world_size > 1:
+            t = torch.tensor([total_loss, total_tokens], device=self.device)  # this rank's sum
+            dist.all_reduce(t, op=dist.ReduceOp.SUM)  # t = sum across ALL ranks 
+            total_loss, total_tokens = t[0].item(), int(t[1].item())
         avg_loss = total_loss / total_tokens
         ppl = math.exp(avg_loss)  # perplexity loss
+
         return avg_loss, ppl
     
     def _raw_model(self) -> nn.Module:
@@ -209,7 +216,7 @@ class Trainer:
             step_loss = 0.0
             self.optimizer.zero_grad() # once per effective batch
             # gradient accumulation, combine batches to make effective batch
-            for _ in range(self.cfg.grad_accum):
+            for i in range(1, self.cfg.grad_accum + 1):  
                 try:
                     batch = next(self.data_iter)
                 except StopIteration:
@@ -218,7 +225,13 @@ class Trainer:
                     if self.train_sampler is not None:
                         self.train_sampler.set_epoch(step // len(self.train_sampler))  
                     batch = next(self.data_iter)  
-                step_loss += self.train_step(batch, self.cfg.grad_accum)
+                # skip all_reduce on early micro-batches, all reduce once on the last micro batches in grad accum
+                if self.is_cuda and (i % self.cfg.grad_accum == 0):
+                    step_loss += self.train_step(batch, self.cfg.grad_accum)
+                else:
+                    with self.model.no_sync(): 
+                        step_loss += self.train_step(batch, self.cfg.grad_accum)
+                    
             if self.is_cuda:
                 self.scaler.step(self.optimizer)             # once per effective batch
                 self.scaler.update()
@@ -234,7 +247,7 @@ class Trainer:
             self.history["train_loss"].append(loss)
             
             # eval and save to checkpoint path
-            if self.gpu_id == 0 and step % self.cfg.eval_every == 0:
+            if step % self.cfg.eval_every == 0:
                 # eval loop
                 t_eval = time.perf_counter()
                 val_loss, val_ppl= self.evaluate(self.val_loader)
@@ -242,13 +255,15 @@ class Trainer:
                 
                 self.history["val_loss"].append(val_loss)
                 self.history["val_ppl"].append(val_ppl)
-                self.save_checkpoint(step)
+                if self.gpu_id == 0:
+                    self.save_checkpoint(step)
+                    
                 self.model.train() # set model back to train mode after eval
                 
                 total_s = time.perf_counter() - t_interval
-                print(f"Step {step}/{self.cfg.max_iters}: "
+                r0print(f"Step {step}/{self.cfg.max_iters}: "
                     f"train_loss {loss:.4f} | val_loss {val_loss:.4f} | ppl {val_ppl:.2f} | ")
-                print(f"Time: total {total_s:.1f} | train {train_s:.1f}s | eval {eval_s:.1f}s")
+                r0print(f"Time: total {total_s:.1f} | train {train_s:.1f}s | eval {eval_s:.1f}s")
                 # reset training and eval time to 0
                 train_s = 0.0
                 eval_s = 0.0
@@ -262,12 +277,12 @@ if __name__ == '__main__':
     import data, config, model
     print(f"threads: {torch.get_num_threads()}, cores: {os.cpu_count()}")
     pipeline = data.DataPipeline(config.DataConfig())
-    train_loader, valid_loader, train_sampler = pipeline.make_pipeline()
+    train_loader, valid_loader, train_sampler, valid_sampler = pipeline.make_pipeline()
     
     model = model.MiniGPT(config.ModelConfig())
     if torch.cuda.is_available():
         model = torch.compile(model)    
-    trainer = Trainer(model, config.TrainConfig(), train_loader, valid_loader, train_sampler)
+    trainer = Trainer(model, config.TrainConfig(), train_loader, valid_loader, train_sampler, valid_sampler)
     resume = "checkpoints/step_10000.pt"
     history = trainer.train(resume)
     

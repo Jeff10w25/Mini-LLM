@@ -66,7 +66,7 @@ class DataPipeline:
     """DataPipeline to prepare data for training
     
     Builds the tokenized corpus from HuggingFace via streaming into
-    compact uint16 .bin files, then create train/validation DataLoaders and train_sampler.
+    compact uint16 .bin files, then create train/validation DataLoaders and train/validation sampler.
     The corpus is built once and reused across sessions (skip tokenization if they already exist).
 
     Tiktoken tokenizer is used for tokenization.
@@ -183,9 +183,11 @@ class DataPipeline:
         
         if world_size > 1: # Have more than 1 GPU
             train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+            valid_sampler = DistributedSampler(valid_ds, num_replicas=world_size, rank=rank, shuffle=False)
             shuffle = False
         else:
             train_sampler = None
+            valid_sampler = None
             shuffle = True
             
         train_loader = DataLoader(
@@ -201,13 +203,14 @@ class DataPipeline:
         valid_loader = DataLoader(
             valid_ds,
             batch_size=self.cfg.batch_size,
-            shuffle=False,                   
+            shuffle=False,           
+            sampler=valid_sampler,        
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
             persistent_workers=self.cfg.persistent_workers and self.cfg.num_workers > 0,
         )
         r0print("Train/Validation DataLoader loaded")
-        return train_loader, valid_loader, train_sampler
+        return train_loader, valid_loader, train_sampler, valid_sampler
     
     def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
         """Make full pipeline. Only need to call this method"""
