@@ -65,13 +65,13 @@ def main():
     if world_size > 1:
         data_cfg.batch_size //= world_size  # split batch across ranks
     pipeline = data.DataPipeline(data_cfg)
-    train_loader, valid_loader, train_sampler = pipeline.make_pipeline()
+    train_loader, valid_loader, train_sampler, valid_sampler = pipeline.make_pipeline()
 
     # model init
     train_model = model.MiniGPT(model_cfg)   
 
     # trainer, wraps in DDP, torch.compile, moves to device internally
-    trainer = Trainer(train_model, train_cfg, train_loader, valid_loader, train_sampler)
+    trainer = Trainer(train_model, train_cfg, train_loader, valid_loader, train_sampler, valid_sampler)
     if args.compile and torch.cuda.is_available():
         utils.r0print("Compiling with torch.compile...")
         trainer.model = torch.compile(trainer.model) 
