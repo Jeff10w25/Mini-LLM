@@ -96,9 +96,10 @@ class RoPE(nn.Module):
         self.register_buffer("sin_cache", pos_enc.sin())
         self.rotate_dim = pos_enc.shape[-1]
     
-    def rotate(self, X: Tensor) -> Tensor:
+    def rotate(self, X: Tensor, offset: int = 0) -> Tensor:
         # only use value up to seq_len of X
-        cos, sin = self.cos_cache[:X.shape[-2]], self.sin_cache[:X.shape[-2]]
+        cos = self.cos_cache[offset:offset + X.shape[-2]] 
+        sin = self.sin_cache[offset:offset + X.shape[-2]]
         rot_X = X * cos + self._rotate_half(X) * sin
         return rot_X
         

@@ -115,6 +115,7 @@ class Trainer:
         """Unwrap DDP (.module) and torch.compile (_orig_mod) for save/load checkpoint
         Handles all combinations, CPU, GPU, GPU+DDP, GPU+DDP+torch.compile
         """
+        model = self.model
         model = getattr(model, "_orig_mod", model)   # strip torch.compile (outer layer)
         model = getattr(model, "module", model)      # strip DDP (inner layer), if present
         model = model.to(self.device)
@@ -150,7 +151,7 @@ class Trainer:
         
         step = ckpt_dict["step"]
         lr = self.scheduler.get_last_lr()[0]          # LR after the loaded scheduler state
-        r0print(f"Resume training at step {step} | lr {lr:.6f} | "
+        r0print(f"Resume training from step {step} | lr {lr:.6f} | "
             f"train_loss {self.history['train_loss'][-1]:.4f}")
         return ckpt_dict["step"]
     
@@ -226,11 +227,11 @@ class Trainer:
                         self.train_sampler.set_epoch(step // len(self.train_sampler))  
                     batch = next(self.data_iter)  
                 # skip all_reduce on early micro-batches, all reduce once on the last micro batches in grad accum
-                if self.is_cuda and (i % self.cfg.grad_accum == 0):
-                    step_loss += self.train_step(batch, self.cfg.grad_accum)
-                else:
-                    with self.model.no_sync(): 
+                if self.world_size > 1 and i % self.cfg.grad_accum != 0:
+                    with self.model.no_sync():
                         step_loss += self.train_step(batch, self.cfg.grad_accum)
+                else:
+                    step_loss += self.train_step(batch, self.cfg.grad_accum)
                     
             if self.is_cuda:
                 self.scaler.step(self.optimizer)             # once per effective batch
@@ -261,9 +262,9 @@ class Trainer:
                 self.model.train() # set model back to train mode after eval
                 
                 total_s = time.perf_counter() - t_interval
-                r0print(f"Step {step}/{self.cfg.max_iters}: "
-                    f"train_loss {loss:.4f} | val_loss {val_loss:.4f} | ppl {val_ppl:.2f} | ")
-                r0print(f"Time: total {total_s:.1f} | train {train_s:.1f}s | eval {eval_s:.1f}s")
+                r0print(f"Step {step}/{self.cfg.max_iters}:")
+                r0print(f"train_loss {loss:.4f} | val_loss {val_loss:.4f} | ppl {val_ppl:.2f}")
+                r0print(f"Time: total {total_s:.1f}s | train {train_s:.1f}s | eval {eval_s:.1f}s")
                 # reset training and eval time to 0
                 train_s = 0.0
                 eval_s = 0.0

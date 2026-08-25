@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 @dataclass
 class ModelConfig:
+    device: str     = "cuda"
     vocab_size: int = 50257
     embed_dim: int  = 128 # 640
     n_heads: int    = 4 # 10
@@ -14,7 +15,6 @@ class ModelConfig:
     dropout: float  = 0.1
 @dataclass
 class TrainConfig:
-    device: str     = "cuda"
     seed: int       = 42
     lr: float       = 3e-4
     grad_accum: int = 4 
@@ -40,6 +40,16 @@ class DataConfig:
     num_workers: int        = 4  # CPU=0, GPU=4
     pin_memory: bool        = True  # CPU=False, GPU=True
     persistent_workers: bool= True  # CPU=False, GPU=True
+@dataclass
+class GeneratorConfig:
+    device: str         = "cuda"
+    ckpt_path: str      = "checkpoints/mini/step_6500.pt"          
+    output_dir: str     = "samples/"
+    temperature: float  = 1.0
+    top_k: int | None   = None
+    top_p: float | None = None
+    max_tokens: int     = 100
+    
     
 # Build 2 models on Kaggle. 1 for smoke test and 1 for actual test.
 PRESETS = {
