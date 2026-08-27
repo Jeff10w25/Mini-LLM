@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  test-fast:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,4 +20,17 @@ jobs:
           python-version: "3.12"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r requirements.txt pytest
-      - run: pytest tests/ -q
+      - run: pytest tests/ -q -m "not slow"
+
+  test-slow:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements.txt pytest
+      - run: pytest tests/ -q -m "slow"
+        timeout-minutes: 30
