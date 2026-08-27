@@ -29,6 +29,12 @@ def apply_overrides(sections: dict, overrides: list[str]):
             raise ValueError(f"Unknown field {section_name}.{field}")
         setattr(cfg, field, type(getattr(cfg, field))(val))
         
+def pretty_view(path):
+    runs = [json.loads(l) for l in open(path, encoding="utf-8")]
+    for r in runs:
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+        print("---")        
+    
 def r0print(*args, **kwargs):
     """Print only from rank 0 (single-GPU/CPU prints normally)."""
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
