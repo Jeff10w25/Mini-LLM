@@ -1,11 +1,13 @@
 """
-config.py provides 
+config.py - dataclass configs for model/train/data plus the PRESETS presets.
 """
 from __future__ import annotations   
+
 from dataclasses import dataclass 
 
 @dataclass
 class ModelConfig:
+    device: str     = "cuda"
     vocab_size: int = 50257
     embed_dim: int  = 128 # 640
     n_heads: int    = 4 # 10
@@ -14,10 +16,9 @@ class ModelConfig:
     dropout: float  = 0.1
 @dataclass
 class TrainConfig:
-    device: str     = "cuda"
     seed: int       = 42
     lr: float       = 3e-4
-    grad_accum: int = 4
+    grad_accum: int = 4 
     max_iters: int  = 20000
     eval_every: int = 500
     ckpt_dir: str   = "checkpoints/"  # for checkpointing in Kaggle
@@ -40,6 +41,17 @@ class DataConfig:
     num_workers: int        = 4  # CPU=0, GPU=4
     pin_memory: bool        = True  # CPU=False, GPU=True
     persistent_workers: bool= True  # CPU=False, GPU=True
+@dataclass
+class GeneratorConfig:
+    seed: int           = 42
+    device: str         = "cuda"
+    ckpt_path: str      = "checkpoints/mini/step_6500.pt"          
+    output_dir: str     = "samples/"
+    temperature: float  = 1.0
+    top_k: int | None   = None
+    top_p: float | None = None
+    max_tokens: int     = 2000
+    
     
 # Build 2 models on Kaggle. 1 for smoke test and 1 for actual test.
 PRESETS = {
@@ -54,7 +66,7 @@ PRESETS = {
         "data": dict(
             data_source_name="sample-10BT",
             total_token=20_000_000,
-            chunk_size= 10_000_000,
+            chunk_size=10_000_000,
             batch_size=16,
             seq_len=128,
             stride=128,
@@ -66,11 +78,12 @@ PRESETS = {
         "train": dict(
             lr=3e-4,
             max_iters=500,
+            grad_accum=4,
             eval_every=50,
             ckpt_dir="checkpoints/smoke/",
         ),
     },
-    "mini-91M": {
+    "mini-90M": {
         "model": dict(
             vocab_size=50257, 
             embed_dim=640, 
@@ -81,20 +94,85 @@ PRESETS = {
         "data": dict(
             data_source_name="sample-10BT",
             total_token=2_000_000_000,
-            chunk_size= 100_000_000,
-            batch_size=48,
+            chunk_size=100_000_000,
+            batch_size=16,
             seq_len=1024,
             stride=1024,
             val_monitor_token=1_000_000,
-            num_workers=4,
+            num_workers=8,
             pin_memory=True,
             persistent_workers=True,
         ),
         "train": dict(
             lr=3e-4,
-            max_iters=40_000,
+            max_iters=30_000,
+            grad_accum= 4,
             eval_every=500,
             ckpt_dir="checkpoints/mini/",
+        ),
+    },
+}
+
+# Generation sampling presets: try each and compare on the same prompt+seed.
+GEN_PRESETS = {
+    "greedy": {  # deterministic argmax - the coherence baseline, no sampling
+        "gen": dict(
+            seed=42,
+            device="cuda",
+            ckpt_path="checkpoints/mini/step_6500.pt",
+            output_dir="samples/",
+            temperature=0.0,   # <=0 -> argmax (greedy)
+            top_k=None,
+            top_p=None,
+            max_tokens=2000,
+        ),
+    },
+    "balanced": {  # recommended: coherent + varied, kills long-tail spam
+        "gen": dict(
+            seed=42,
+            device="cuda",
+            ckpt_path="checkpoints/mini/step_6500.pt",
+            output_dir="samples/",
+            temperature=0.8,
+            top_k=50,
+            top_p=0.95,
+            max_tokens=2000,
+        ),
+    },
+    "creative": {  # free but filtered: same variety as baseline, no weird tokens
+        "gen": dict(
+            seed=42,
+            device="cuda",
+            ckpt_path="checkpoints/mini/step_6500.pt",
+            output_dir="samples/",
+            temperature=1.0,
+            top_k=None,
+            top_p=0.95,
+            max_tokens=2000,
+        ),
+    },
+    "coherent": {  # aggressive coherence: lowest temperature, tightest top_k
+        "gen": dict(
+            seed=42,
+            device="cuda",
+            ckpt_path="checkpoints/mini/step_6500.pt",
+            output_dir="samples/",
+            temperature=0.6,
+            top_k=20,
+            top_p=None,
+            max_tokens=2000,
+        ),
+    },
+    "plain": {  # your current baseline: temp 1.0, no filtering
+        "gen": dict(
+            seed=42,
+            device="cuda",
+            ckpt_path="checkpoints/mini/step_6500.pt",
+            output_dir="samples/",
+            temperature=1.0,
+            top_k=None,
+            top_p=None,
+            max_tokens=2000,
         ),
     },
 }

@@ -1,18 +1,20 @@
-"""data.py — token arrays, TokenDataset, and dataset construction."""
+"""data.py - token arrays, TokenDataset, and dataset construction."""
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-import numpy as np
-import torch
 import os
+
+import numpy as np
 import tiktoken
+import torch
+from dotenv import load_dotenv
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from datasets import load_dataset
-from dotenv import load_dotenv
 
 import config
+from utils import r0print
 
 if TYPE_CHECKING:
     # only read by your IDE/Type Checker, completely ignored at runtime
@@ -20,10 +22,8 @@ if TYPE_CHECKING:
     from datasets import IterableDataset
     from config import DataConfig
 
-def r0print(*args, **kwargs):
-    """Print only from rank 0 (1xGPU or CPU prints normally)"""
-    if int(os.environ.get("LOCAL_RANK", 0)) == 0:
-        print(*args, **kwargs) 
+if not os.environ.get("HF_TOKEN"):
+    load_dotenv()
 class TokenDataset(Dataset):
     """TokenDataset for DataLoader
     
@@ -67,11 +67,11 @@ class DataPipeline:
     """DataPipeline to prepare data for training
     
     Builds the tokenized corpus from HuggingFace via streaming into
-    compact uint16 .bin files, then create train/validation DataLoaders and train_sampler.
+    compact uint16 .bin files, then create train/validation DataLoaders and train/validation sampler.
     The corpus is built once and reused across sessions (skip tokenization if they already exist).
 
     Tiktoken tokenizer is used for tokenization.
-    (r50k_base → n_vocab ≈ 50257) 
+    (r50k_base -> n_vocab ≈ 50257) 
     
     Attributes:
         cfg (DataConfig): Data hyperparameters.
@@ -95,7 +95,7 @@ class DataPipeline:
         r0print("Starting tokenization...")
         with open(out_path, "wb") as f:
             for batch in stream.iter(batch_size=1000):
-                encoded = self.tokenizer.encode_batch(batch["text"], allowed_special="<|endoftext|>")
+                encoded = self.tokenizer.encode_batch(batch["text"], allowed_special={"<|endoftext|>"})
                 
                 for ids in encoded:
                     """flatten the doc and append EOS token to the end each document
@@ -162,7 +162,7 @@ class DataPipeline:
         diff = 100 * abs(num_tokens - expected) / expected
         ok = diff < 1 # acceptable < 1% token mismatch
         msg = f"{bin_path}: {num_tokens:,} tokens (expected {expected:,}, diff {diff:.2f}%)"
-        print(f"{msg} -> {'OK' if ok else 'MISMATCH'}")
+        r0print(f"{msg} -> {'OK' if ok else 'MISMATCH'}")
 
     def _verify_sizes(self):
         total = self.cfg.total_token
@@ -176,7 +176,7 @@ class DataPipeline:
         valid_ds = TokenDataset(path=self.cfg.valid_bin_path, seq_len=self.cfg.seq_len, stride=self.cfg.stride, max_tokens=self.cfg.val_monitor_token)
         return train_ds, valid_ds
 
-    def make_loader(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
+    def make_loader(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None, DistributedSampler | None]:
         """Build train/validation dataloader. Also handles DDP using DistributedSampler"""
         train_ds, valid_ds = self.make_dataset()
         world_size = int(os.environ.get("WORLD_SIZE", 1)) 
@@ -184,9 +184,11 @@ class DataPipeline:
         
         if world_size > 1: # Have more than 1 GPU
             train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+            valid_sampler = DistributedSampler(valid_ds, num_replicas=world_size, rank=rank, shuffle=False)
             shuffle = False
         else:
             train_sampler = None
+            valid_sampler = None
             shuffle = True
             
         train_loader = DataLoader(
@@ -202,15 +204,16 @@ class DataPipeline:
         valid_loader = DataLoader(
             valid_ds,
             batch_size=self.cfg.batch_size,
-            shuffle=False,                   
+            shuffle=False,           
+            sampler=valid_sampler,        
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
             persistent_workers=self.cfg.persistent_workers and self.cfg.num_workers > 0,
         )
         r0print("Train/Validation DataLoader loaded")
-        return train_loader, valid_loader, train_sampler
+        return train_loader, valid_loader, train_sampler, valid_sampler
     
-    def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
+    def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None, DistributedSampler | None]:
         """Make full pipeline. Only need to call this method"""
         self.check_corpus_exist()
         self._verify_sizes()

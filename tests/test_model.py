@@ -1,4 +1,6 @@
+import math
 import torch
+import torch.nn.functional as F
 from model import MultiHeadAttention, SwiGLUFFN, TransformerBlock
 from pos_encoding import FrequencyPE
 
@@ -56,3 +58,11 @@ def test_causal_mask_is_lower_triangular(tiny_cfg):
     )
     mask = mha.causal_mask
     assert mask.triu(1).sum().item() == 0
+    
+def test_initial_loss_is_reasonable(tiny_model, tiny_cfg):
+    model = tiny_model.eval()
+    x = torch.randint(0, tiny_cfg.vocab_size, (2, tiny_cfg.seq_len))
+    with torch.no_grad():
+        logits = model(x)
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), x.view(-1))
+    assert abs(loss.item() - math.log(tiny_cfg.vocab_size)) < 2.0
