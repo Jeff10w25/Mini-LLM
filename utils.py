@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+
 import torch
 import torch.distributed as dist
-from typing import Any
 
 def ddp_setup():
     """Initialize the process group only when actually running DDP (torchrun)."""

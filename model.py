@@ -39,7 +39,7 @@ class KVCache:
         end = self.pos + k.size(-2)
         self.k[layer_idx][:, :, start:end, :] = k
         self.v[layer_idx][:, :, start:end, :] = v
-
+                
         return (
             self.k[layer_idx][:, :, :end, :],
             self.v[layer_idx][:, :, :end, :],
@@ -284,6 +284,6 @@ if __name__ == "__main__":
     cfg = config.ModelConfig()
     model = MiniGPT(cfg)
     tied = id(model.embed.weight) == id(model.output.weight)
-    print("Tied Embed and LM head weights =", tied)   # → True if tied correctly, on the same memory address
+    print("Tied Embed and LM head weights =", tied)   # -> True if tied correctly, on the same memory address
     total_params = sum(p.numel() for p in set(model.parameters()))
     print(f"Total Parameters: {total_params:,}") # should be around 50M parameters

@@ -11,8 +11,8 @@ Flags:
                         skip on Windows because not support out of the box).
     --override <>
 """
-import os
 import argparse
+import os
 
 import torch
 import torch.distributed as dist
@@ -20,8 +20,8 @@ import torch.distributed as dist
 import config
 import data
 import model
+import utils
 from train import Trainer
-import utils 
 
 
 def main():
