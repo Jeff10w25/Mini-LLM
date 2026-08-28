@@ -3,14 +3,15 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-import numpy as np
-import torch
 import os
+
+import numpy as np
 import tiktoken
+import torch
+from dotenv import load_dotenv
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from datasets import load_dataset
-from dotenv import load_dotenv
 
 import config
 from utils import r0print
@@ -70,7 +71,7 @@ class DataPipeline:
     The corpus is built once and reused across sessions (skip tokenization if they already exist).
 
     Tiktoken tokenizer is used for tokenization.
-    (r50k_base → n_vocab ≈ 50257) 
+    (r50k_base -> n_vocab ≈ 50257) 
     
     Attributes:
         cfg (DataConfig): Data hyperparameters.

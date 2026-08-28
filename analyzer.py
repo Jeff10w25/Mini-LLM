@@ -10,8 +10,6 @@ import sys
 from pathlib import Path
 
 
-# ---------- metrics ----------
-
 def repetition_rate(text: str, n: int = 4) -> float:
     """Fraction of n-grams that repeat. 0 = fully novel, ~1 = degenerate loop."""
     tokens = text.split()
@@ -27,17 +25,14 @@ def repetition_rate(text: str, n: int = 4) -> float:
             seen.add(gram)
     return repeats / (len(tokens) - n + 1)
 
-
 def unique_ratio(text: str) -> float:
     """Fraction of unique tokens. 1.0 = all different, low = repetitive."""
     tokens = text.split()
     return len(set(tokens)) / len(tokens) if tokens else 0.0
 
-
 def avg_token_len(text: str) -> float:
     tokens = text.split()
     return sum(len(t) for t in tokens) / len(tokens) if tokens else 0.0
-
 
 def summarize(entry: dict) -> dict:
     text = entry.get("output", "")
@@ -49,13 +44,9 @@ def summarize(entry: dict) -> dict:
         "n_chars": len(text),
     }
 
-
-# ---------- io ----------
-
 def load_jsonl(path: str) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
-
 
 def print_table(runs: list[dict]):
     print(f"{'preset':<12} {'ckpt':<15} {'rep4':>6} {'rep8':>6} {'unique':>7} {'chars':>7} {'time_s':>7}")
@@ -69,19 +60,11 @@ def print_table(runs: list[dict]):
             f"{m['n_chars']:>7} {r.get('time_s', 0):>7.1f}"
         )
 
-
-# ---------- main ----------
-
 def main():
     args = sys.argv[1:]
     if not args:
         args = sorted(str(p) for p in Path("samples").glob("generations_*.jsonl"))
-
     paths = args
-    # if args:
-    #     paths = args
-    # else: 
-    #     path = sorted(str(p) for p in Path("samples").glob("generations_*.jsonl"))
 
     for path in paths:
         runs = load_jsonl(path)
