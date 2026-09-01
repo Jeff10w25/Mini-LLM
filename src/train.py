@@ -37,16 +37,11 @@ class Trainer:
         train_loader: Training batches (already sharded for DDP)
         val_loader: Validation batches (shuffle=False)
         train_sampler: Train sampler for set_epoch on restart (None when not using DDP)
-        valid_sampler: Valid sampler (None when not using DDP)
     """
     def __init__(
         self, 
         model: nn.Module, 
         cfg: TrainConfig, 
-        train_loader: DataLoader, 
-        val_loader: DataLoader, 
-        train_sampler: DistributedSampler | None,
-        valid_sampler: DistributedSampler | None
         ):
         
         gpu_id = int(os.environ.get("LOCAL_RANK", 0))
@@ -72,10 +67,6 @@ class Trainer:
             self.scaler = None
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, fused=self.is_cuda)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=cfg.max_iters)
-        self.train_sampler = train_sampler
-        self.valid_sampler = valid_sampler
-        self.train_loader = train_loader
-        self.val_loader = val_loader
         self.history = {
             "train_loss": [], 
             "val_loss": [],
@@ -193,7 +184,13 @@ class Trainer:
             (loss / accum).backward()
         return loss.item()
 
-    def train(self, resume_path: str | None = None) -> dict:
+    def train(
+        self, 
+        train_loader: DataLoader, 
+        val_loader: DataLoader, 
+        train_sampler: DistributedSampler | None,
+        resume_path: str | None = None
+        ) -> dict:
         """Run the training loop for max_iters steps, eval and save on eval_every.
 
         Gradient accumulation happens inside each step. Effective batch = batch_size * grad_accum
@@ -204,7 +201,7 @@ class Trainer:
         The training history is saved in JSON format at checkpoint directory.
         """
         start = self.load_valid_checkpoint(resume_path) # starting step
-        self.data_iter = iter(self.train_loader) # make iterable 
+        self.data_iter = iter(train_loader) # make iterable 
         self.model.train()
         print(f"Start Training on {self.device}...\n") # print on all rank available
         
@@ -223,10 +220,10 @@ class Trainer:
                 try:
                     batch = next(self.data_iter)
                 except StopIteration:
-                    self.data_iter = iter(self.train_loader)
+                    self.data_iter = iter(train_loader)
                     # tells what shuffle sampler will use in case of training many epochs, set epoch only on restart
-                    if self.train_sampler is not None:
-                        self.train_sampler.set_epoch(step // len(self.train_sampler))  
+                    if train_sampler is not None:
+                        train_sampler.set_epoch(step // len(train_sampler))  
                     batch = next(self.data_iter)  
                 # skip all_reduce on early micro-batches, all reduce once on the last micro batches in grad accum
                 if self.world_size > 1 and i % self.cfg.grad_accum != 0:
@@ -253,7 +250,7 @@ class Trainer:
             if step % self.cfg.eval_every == 0:
                 # eval loop
                 t_eval = time.perf_counter()
-                val_loss, val_ppl= self.evaluate(self.val_loader)
+                val_loss, val_ppl= self.evaluate(val_loader)
                 eval_s += time.perf_counter() - t_eval
                 
                 self.history["val_loss"].append(val_loss)
@@ -277,17 +274,17 @@ class Trainer:
         return self.history
                 
 if __name__ == '__main__':
-    import data as data, config as config, model as model
+    import data, config, model
     print(f"threads: {torch.get_num_threads()}, cores: {os.cpu_count()}")
     pipeline = data.DataPipeline(config.DataConfig())
-    train_loader, valid_loader, train_sampler, valid_sampler = pipeline.make_pipeline()
+    train_loader, valid_loader, train_sampler = pipeline.make_pipeline()
     
     model = model.MiniGPT(config.ModelConfig())
     if torch.cuda.is_available():
         model = torch.compile(model)    
-    trainer = Trainer(model, config.TrainConfig(), train_loader, valid_loader, train_sampler, valid_sampler)
+    trainer = Trainer(model, config.TrainConfig())
     resume = "checkpoints/step_10000.pt"
-    history = trainer.train(resume)
+    history = trainer.train(train_loader, valid_loader, train_sampler, resume)
     
     # x = torch.randint(0, 50257, (32, 128))
     # model.train()
