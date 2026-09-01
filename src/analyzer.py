@@ -5,6 +5,7 @@ Usage:
     python analyze.py                          # all samples/*.jsonl
     python analyze.py samples/generations_step_6500.jsonl
 """
+
 import json
 import sys
 from pathlib import Path

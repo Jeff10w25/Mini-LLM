@@ -14,6 +14,7 @@ class ModelConfig:
     n_layers: int   = 4 # 12
     seq_len: int    = 128 # 1024
     dropout: float  = 0.1
+    
 @dataclass
 class TrainConfig:
     seed: int       = 42
@@ -22,6 +23,7 @@ class TrainConfig:
     max_iters: int  = 20000
     eval_every: int = 500
     ckpt_dir: str   = "checkpoints/"  # for checkpointing in Kaggle
+    
 @dataclass
 class DataConfig:
     data_source: str        = "HuggingFaceFW/fineweb-edu"
@@ -41,6 +43,7 @@ class DataConfig:
     num_workers: int        = 4  # CPU=0, GPU=4
     pin_memory: bool        = True  # CPU=False, GPU=True
     persistent_workers: bool= True  # CPU=False, GPU=True
+    
 @dataclass
 class GeneratorConfig:
     seed: int           = 42
@@ -51,6 +54,7 @@ class GeneratorConfig:
     top_k: int | None   = None
     top_p: float | None = None
     max_tokens: int     = 2000
+    banned_tokens: int  = 50256 # endoftext token
     
     
 # Build 2 models on Kaggle. 1 for smoke test and 1 for actual test.

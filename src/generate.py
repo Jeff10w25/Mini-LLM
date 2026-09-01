@@ -27,7 +27,8 @@ class TextGenSampler:
         self, 
         temperature: float = 1.0, 
         top_k: int | None = None,
-        top_p: float | None = None
+        top_p: float | None = None,
+        banned_tokens: int | None = None
         ): 
         
         if (top_k is not None) and top_k <= 0:
@@ -37,6 +38,11 @@ class TextGenSampler:
         self.temperature = temperature
         self.top_k = top_k
         self.top_p = top_p
+        self.banned_tokens = banned_tokens
+        # elif isinstance(banned_tokens, int):        # single int
+        #     self.banned_tokens = {banned_tokens}
+        # else:                                       # handle list/tuple/set
+        #     self.banned_tokens = set(banned_tokens)
 
     def __call__(self, logits: Tensor):
         # apply order is temperature -> top_k -> softmax -> top_p
@@ -44,6 +50,10 @@ class TextGenSampler:
             # greedy sampling, ignore top_p and top_k and select highest logit's token
             return logits.argmax(dim=-1, keepdim=True)
         
+        if self.banned_tokens is not None:
+            logits = logits.clone()
+            logits[..., self.banned_tokens] = -torch.inf
+            
         logits = self._apply_temperature(logits)
         if self.top_k is not None:
             logits = self._apply_top_k(logits)
@@ -97,7 +107,7 @@ class Generator:
         self._raw_model().load_state_dict(model_state, strict=False)
         self.model.eval() # evaluation mode
         self.max_tokens = gen_cfg.max_tokens
-        self.sampler = TextGenSampler(gen_cfg.temperature, gen_cfg.top_k, gen_cfg.top_p)
+        self.sampler = TextGenSampler(gen_cfg.temperature, gen_cfg.top_k, gen_cfg.top_p, gen_cfg.banned_tokens)
         self.tokenizer = tiktoken.get_encoding("r50k_base")
         self.model_cfg = model_cfg
         self.gen_cfg = gen_cfg
@@ -125,29 +135,25 @@ class Generator:
     def gen_annealing(self, total_ids: Tensor, annealing: str | None = None):
         if annealing is None:
             return
-        base_temp = self.sampler.temperature
-        base_k = self.sampler.top_k
-        base_p = self.sampler.top_p
-        max_temp = 2.0
-        max_k = 1000
-        max_p = 0.99
-        
-        if annealing is not None and self.is_repeating(total_ids):
+        base_temp, base_k, base_p = self.sampler.temperature, self.sampler.top_k, self.sampler.top_p
+        max_temp, max_k, max_p = 2.0, 1000, 0.99
+
+        if self.is_repeating(total_ids):
             # if n_gram repeating, loosen everything that's active
             if annealing == "temp":
                 self.sampler.temperature = min(self.sampler.temperature * 1.1, max_temp)
-            elif self.sampler.top_k is not None and annealing == "top_k":
-                self.sampler.top_k = min(self.sampler.top_k * 1.5, max_k)
-            elif self.sampler.top_p is not None and annealing == "top_p":
-                self.sampler.top_p = min(self.sampler.top_p + 0.05, max_p)   
+            elif annealing == "top_k" and self.sampler.top_k is not None:
+                self.sampler.top_k = min(int(self.sampler.top_k * 1.5), max_k)
+            elif annealing == "top_p" and self.sampler.top_p is not None:
+                self.sampler.top_p = min(self.sampler.top_p + 0.05, max_p)
         else:
             # if no longer repeating, decrease toward base value
             if annealing == "temp":
                 self.sampler.temperature = max(base_temp, self.sampler.temperature / 1.1)
-            elif self.sampler.top_k is not None:
-                self.sampler.top_k = max(base_k, self.sampler.top_k / 1.5)   
-            elif self.sampler.top_p is not None:
-                self.sampler.top_p = min(base_p, self.sampler.top_p - 0.05)       
+            elif annealing == "top_k" and self.sampler.top_k is not None:
+                self.sampler.top_k = max(base_k, self.sampler.top_k // 1.5)
+            elif annealing == "top_p" and self.sampler.top_p is not None:
+                self.sampler.top_p = max(base_p, self.sampler.top_p - 0.05)      
         
     def _raw_model(self):
         model = self.model
@@ -245,20 +251,12 @@ class Generator:
             
         return full_text
 
+def main():
+    preset = config.PRESETS
+    model_cfg = config.ModelConfig(**preset["mini-90M"]["model"])
+    gen_presets = config.GEN_PRESETS 
     
 if __name__ == "__main__":
-    # logits = torch.rand(1, 20, 20) 
-    # print(logits.sum(dim=-1))
-    # logits = logits / logits.sum(dim=-1)
-    # sampler = TextGenSampler(top_k=10, top_p=0.5)
-    # out = sampler._apply_top_k(logits[:, -1, :])
-    # print(out)
-    # out = sampler._apply_softmax(out)
-    # print(out, out.sum())
-    # out = sampler._apply_top_p(out)
-    # print(out, out.sum())
-    # print(logits, out)
-    
     preset = config.PRESETS
     model_cfg = config.ModelConfig(**preset["mini-90M"]["model"])
     gen_presets = config.GEN_PRESETS 
@@ -302,44 +300,51 @@ if __name__ == "__main__":
     # short test 
     gen_cfg = config.GeneratorConfig(ckpt_path="checkpoints/mini/step_15000.pt")
     text_gen = Generator(model_cfg, gen_cfg)
-    prompt = ["There was a time in 1920 in Paris where half of the population"]
+    prompt = "There was a time in 1920 in Paris where half of the population"
     text_gen.sampler.temperature = 0.8
     text_gen.sampler.top_k = 100
     text_gen.sampler.top_p = 0.6
     text_gen.max_tokens = 2000
+    text_gen.sampler.banned_tokens = 50256
+    anneal_list = ["temp"]
     
-    for prompt in prompt:
+    for anneal in anneal_list:
         utils.seed_everything(gen_cfg.seed)
+        text_gen.sampler.temperature = 0.95
+        text_gen.sampler.top_k = 100
+        text_gen.sampler.top_p = 0.9
+        text_gen.max_tokens = 10240
+        text_gen.sampler.banned_tokens = 50256
         text_gen.generate(
             prompt,
             caching=True, 
-            keep=model_cfg.seq_len//2, 
+            keep=int(model_cfg.seq_len // 1.5), 
             to_json=False,
-            gen_annealing=None
+            gen_annealing=anneal
         )
-        utils.seed_everything(gen_cfg.seed)
-        text_gen.generate(
-            prompt,
-            caching=True, 
-            keep=model_cfg.seq_len//2, 
-            to_json=False,
-            gen_annealing="temp"
-        )
-        utils.seed_everything(gen_cfg.seed)
-        text_gen.generate(
-            prompt,
-            caching=True, 
-            keep=model_cfg.seq_len//2, 
-            to_json=False,
-            gen_annealing="top_k"
-        )
-        utils.seed_everything(gen_cfg.seed)
-        text_gen.generate(
-            prompt,
-            caching=True, 
-            keep=model_cfg.seq_len//2, 
-            to_json=False,
-            gen_annealing="top_p"
-        )
+        # utils.seed_everything(gen_cfg.seed)
+        # text_gen.generate(
+        #     prompt,
+        #     caching=True, 
+        #     keep=model_cfg.seq_len//2, 
+        #     to_json=False,
+        #     gen_annealing="temp"
+        # )
+        # utils.seed_everything(gen_cfg.seed)
+        # text_gen.generate(
+        #     prompt,
+        #     caching=True, 
+        #     keep=model_cfg.seq_len//2, 
+        #     to_json=False,
+        #     gen_annealing="top_k"
+        # )
+        # utils.seed_everything(gen_cfg.seed)
+        # text_gen.generate(
+        #     prompt,
+        #     caching=True, 
+        #     keep=model_cfg.seq_len//2, 
+        #     to_json=False,
+        #     gen_annealing="top_p"
+        # )
 
     # utils.pretty_view("samples\generations_step_3500.jsonl")

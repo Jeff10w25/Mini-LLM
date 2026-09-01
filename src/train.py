@@ -277,7 +277,7 @@ class Trainer:
         return self.history
                 
 if __name__ == '__main__':
-    import data, config, model
+    import data as data, config as config, model as model
     print(f"threads: {torch.get_num_threads()}, cores: {os.cpu_count()}")
     pipeline = data.DataPipeline(config.DataConfig())
     train_loader, valid_loader, train_sampler, valid_sampler = pipeline.make_pipeline()
