@@ -1,0 +1,11 @@
+{
+  "seed": 42,
+  "device": "cuda",
+  "ckpt_path": "checkpoints/mini/step_3500.pt",
+  "output_dir": "samples/",
+  "temperature": 0.8,
+  "top_k": 50,
+  "top_p": 0.95,
+  "max_tokens": 10000,
+  "banned_tokens": 50256
+}
