@@ -298,27 +298,24 @@ if __name__ == "__main__":
     #             )
                 
     # short test 
-    gen_cfg = config.GeneratorConfig(ckpt_path="checkpoints/mini/step_15000.pt")
+    model_cfg = config.from_json(config.ModelConfig, "configs/model.json")
+    gen_cfg = config.from_json(config.GeneratorConfig, "configs/gen.json")
+
     text_gen = Generator(model_cfg, gen_cfg)
     prompt = "There was a time in 1920 in Paris where half of the population"
-    text_gen.sampler.temperature = 0.8
-    text_gen.sampler.top_k = 100
-    text_gen.sampler.top_p = 0.6
-    text_gen.max_tokens = 2000
-    text_gen.sampler.banned_tokens = 50256
     anneal_list = ["temp"]
     
     for anneal in anneal_list:
         utils.seed_everything(gen_cfg.seed)
-        text_gen.sampler.temperature = 0.95
-        text_gen.sampler.top_k = 100
-        text_gen.sampler.top_p = 0.9
-        text_gen.max_tokens = 10240
-        text_gen.sampler.banned_tokens = 50256
+        # text_gen.sampler.temperature = 0.95
+        # text_gen.sampler.top_k = 100
+        # text_gen.sampler.top_p = 0.9
+        # text_gen.max_tokens = 10240
+        # text_gen.sampler.banned_tokens = 50256
         text_gen.generate(
             prompt,
             caching=True, 
-            keep=int(model_cfg.seq_len // 1.5), 
+            keep=int(model_cfg.seq_len // 2), 
             to_json=False,
             gen_annealing=anneal
         )

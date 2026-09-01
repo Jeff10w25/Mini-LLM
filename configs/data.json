@@ -1,0 +1,11 @@
+{
+  "data_source_name": "sample-10BT",
+  "total_token": 2000000000,
+  "chunk_size": 100000000,
+  "batch_size": 16,
+  "seq_len": 1024,
+  "stride": 1024,
+  "num_workers": 4,
+  "pin_memory": true,
+  "persistent_workers": true
+}
