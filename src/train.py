@@ -148,7 +148,7 @@ class Trainer:
             f"train_loss {self.history['train_loss'][-1]:.4f}")
         return ckpt_dict["step"]
     
-    def load_valid_checkpoint(self, resume_path: str) -> int:
+    def load_valid_checkpoint(self, resume_path: str | None) -> int:
         """Verify that checkpoint path is valid, other wise raise error and exit.
         Returns the starting step"""
         if resume_path is not None:

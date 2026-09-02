@@ -33,6 +33,7 @@ class MiniGPT_LM(LM):
         device: str = "cpu", 
         batch_size: int = 1
         ):
+        
         super().__init__()
         state = torch.load(ckpt_path, map_location=device, weights_only=False)
         cfg = config.from_json(config.ModelConfig, "configs/model.json")

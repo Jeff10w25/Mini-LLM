@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import config
 from pos_encoding import FrequencyPE, RoPE
 
 if TYPE_CHECKING:
@@ -18,20 +17,34 @@ if TYPE_CHECKING:
         
         
 class KVCache:
+    """Pre-allocated per-layer KV cache.
+
+    Stores each layer's keys/values in fixed-size tensors (max length = seq_len);
+    update() writes the newest step and returns everything up to the current end,
+    so attention reuses past context instead of recomputing it.
+
+    Args:
+        n_layers: Number of transformer layers (one cache slot per layer)
+        n_heads: Number of attention heads
+        seq_len: Max sequence length the cache can hold
+        d_head: embed_dim // n_heads
+        device: Device the cache tensors live on
+    """
+    
     def __init__(
         self, 
         n_layers: int, 
         n_heads: int, 
         seq_len: int, 
         d_head: int, 
-        device
+        device: str
         ):
         # pre-allocate, OR start empty and cat-append
         self.k = [torch.empty((1, n_heads, seq_len, d_head), device=device) for _ in range(n_layers)]
         self.v = [torch.empty((1, n_heads, seq_len, d_head), device=device) for _ in range(n_layers)]
         self.pos = 0
 
-    def update(self, layer_idx: int, k: Tensor, v: Tensor):
+    def update(self, layer_idx: int, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
 
         # if end > self.k[layer_idx].size(-2):
         #     raise RuntimeError("KV cache overflow")
