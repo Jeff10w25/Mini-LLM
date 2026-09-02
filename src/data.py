@@ -185,16 +185,17 @@ class DataPipeline:
         if world_size > 1: # Have more than 1 GPU
             train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
             valid_sampler = DistributedSampler(valid_ds, num_replicas=world_size, rank=rank, shuffle=False)
-            shuffle = False
         else:
             train_sampler = None
             valid_sampler = None
-            shuffle = True
+            
+        train_shuffle   = world_size <= 1       
+        valid_shuffle   = False
             
         train_loader = DataLoader(
             train_ds,
             batch_size=self.cfg.batch_size,
-            shuffle=shuffle,
+            shuffle=train_shuffle,
             sampler=train_sampler,  # Use sampler to shuffle the data instead                
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
@@ -204,14 +205,14 @@ class DataPipeline:
         valid_loader = DataLoader(
             valid_ds,
             batch_size=self.cfg.batch_size,
-            shuffle=False,           
+            shuffle=valid_shuffle,           
             sampler=valid_sampler,        
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
             persistent_workers=self.cfg.persistent_workers and self.cfg.num_workers > 0,
         )
         r0print("Train/Validation DataLoader loaded")
-        return train_loader, valid_loader, train_sampler, valid_sampler
+        return train_loader, valid_loader, train_sampler
     
     def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None, DistributedSampler | None]:
         """Make full pipeline. Only need to call this method"""
@@ -220,16 +221,6 @@ class DataPipeline:
         return self.make_loader()
         
 if __name__ == "__main__":
-    # Sanity check on all functions
-    load_dotenv()
-    # tokenize a sentence -> Dataset
-    # tokenizer = tiktoken.get_encoding("p50k_base")
-    # input_ids = tokenizer.encode("The cat was underperforming in Q2 so it was put on PIP")
-    # arr = np.array(input_ids, dtype=np.uint16)
-    # ds = TokenDataset.__new__(TokenDataset)   # bypass __init__ for the test...
-    # print(arr, "\n")
-    
-    # Load and tokenize test on full corpus
     pipeline = DataPipeline(config.DataConfig)
     train_loader, valid_loader = pipeline.make_pipeline()
     

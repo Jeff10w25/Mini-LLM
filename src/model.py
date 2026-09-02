@@ -45,17 +45,6 @@ class KVCache:
             self.v[layer_idx][:, :, :end, :],
         )
 
-    # def append(self, layer_idx, k, v):
-    #     # assert self.k[layer_idx].shape[0] == k.shape[0]
-    #     # assert self.k[layer_idx].shape[1] == k.shape[1]
-    #     # assert self.k[layer_idx].shape[3] == k.shape[3]
-        
-    #     self.k[layer_idx][:, :, self.pos:self.pos + k.size(-2)] = k
-    #     self.v[layer_idx][:, :, self.pos:self.pos + v.size(-2)] = v
-
-    # def get(self, layer_idx):
-    #     return self.k[layer_idx][:, :, :self.pos], self.v[layer_idx][:, :, :self.pos]
-
     def advance(self, n: int):
         self.pos += n
 
@@ -278,12 +267,3 @@ class MiniGPT(nn.Module):
         for i, layer in enumerate(self.layers):
             text_embeds = layer(text_embeds, kv_cache=kv_cache, layer_idx=i, offset=offset)
         return self.output(self.norm(text_embeds))
-    
-    
-if __name__ == "__main__":
-    cfg = config.ModelConfig()
-    model = MiniGPT(cfg)
-    tied = id(model.embed.weight) == id(model.output.weight)
-    print("Tied Embed and LM head weights =", tied)   # -> True if tied correctly, on the same memory address
-    total_params = sum(p.numel() for p in set(model.parameters()))
-    print(f"Total Parameters: {total_params:,}") # should be around 50M parameters
