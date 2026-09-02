@@ -5,22 +5,40 @@ from pathlib import Path
 
 CONFIGS_DIR = Path(__file__).resolve().parent.parent / "configs"
 
-def test_presets_have_required_keys():
-    for name, preset in config.PRESETS.items():
-        assert "model" in preset
-        assert "data" in preset
-        assert "train" in preset
+# configs/*.json are now the single source of truth (PRESETS removed).
+CONFIG_FILES = [
+    ("model.json", config.ModelConfig),
+    ("train.json", config.TrainConfig),
+    ("data.json", config.DataConfig),
+    ("gen.json", config.GeneratorConfig),
+]
 
-def test_preset_seq_len_matches():
-    for name, preset in config.PRESETS.items():
-        m_seq = preset["model"]["seq_len"]
-        d_seq = preset["data"]["seq_len"]
-        assert m_seq == d_seq, f"preset '{name}' seq_len mismatch"
+def test_config_jsons_exist():
+    """Every expected config JSON must be present on disk."""
+    for name, _cls in CONFIG_FILES:
+        assert (CONFIGS_DIR / name).is_file(), f"missing {name}"
 
-def test_model_heads_divide_embed_dim():
-    for name, preset in config.PRESETS.items():
-        m = preset["model"]
-        assert m["embed_dim"] % m["n_heads"] == 0
+
+def test_config_jsons_load_into_right_type():
+    """Each config JSON must load into its matching dataclass type."""
+    for name, cls in CONFIG_FILES:
+        cfg = config.from_json(cls, CONFIGS_DIR / name)
+        assert isinstance(cfg, cls), f"{name} did not load into {cls.__name__}"
+
+
+def test_json_data_window_fits_model_context():
+    """A training window (data seq_len) must fit inside the model's context."""
+    model_cfg = config.from_json(config.ModelConfig, CONFIGS_DIR / "model.json")
+    data_cfg = config.from_json(config.DataConfig, CONFIGS_DIR / "data.json")
+    assert data_cfg.seq_len <= model_cfg.seq_len
+
+
+def test_json_model_heads_divide_embed_dim():
+    """Model config must have embed_dim divisible by n_heads."""
+    model_cfg = config.from_json(config.ModelConfig, CONFIGS_DIR / "model.json")
+    assert model_cfg.embed_dim % model_cfg.n_heads == 0
+
+
 def test_from_json_overrides_and_defaults(tmp_path):
     """from_json: JSON values win, missing keys use dataclass defaults, unknown keys dropped."""
     f = tmp_path / "model.json"
@@ -45,13 +63,7 @@ def test_from_json_overrides_and_defaults(tmp_path):
 def test_sample_configs_load_without_error():
     """Sample JSONs must still load into the right config type.
     Values are user-editable data, so we assert type only - never values."""
-    expected = [
-        (config.ModelConfig, "model.json"),
-        (config.TrainConfig, "train.json"),
-        (config.DataConfig, "data.json"),
-        (config.GeneratorConfig, "gen.json"),
-    ]
-    for cls, name in expected:
+    for cls, name in [(cls, name) for name, cls in CONFIG_FILES]:
         cfg = config.from_json(cls, CONFIGS_DIR / name)
         assert isinstance(cfg, cls)
 

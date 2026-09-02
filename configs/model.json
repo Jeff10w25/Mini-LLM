@@ -1,7 +1,10 @@
 {
-  "note": "extra key - from_json drops it (not a ModelConfig field)",
+  "_comment": "Full ModelConfig source of truth (mini-90M). config.from_json ignores unknown keys.",
+  "device": "cuda",
+  "vocab_size": 50257,
   "embed_dim": 640,
   "n_heads": 10,
   "n_layers": 12,
-  "seq_len": 1024
+  "seq_len": 1024,
+  "dropout": 0.1
 }

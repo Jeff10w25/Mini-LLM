@@ -221,16 +221,6 @@ class DataPipeline:
         return self.make_loader()
         
 if __name__ == "__main__":
-    # Sanity check on all functions
-    load_dotenv()
-    # tokenize a sentence -> Dataset
-    # tokenizer = tiktoken.get_encoding("p50k_base")
-    # input_ids = tokenizer.encode("The cat was underperforming in Q2 so it was put on PIP")
-    # arr = np.array(input_ids, dtype=np.uint16)
-    # ds = TokenDataset.__new__(TokenDataset)   # bypass __init__ for the test...
-    # print(arr, "\n")
-    
-    # Load and tokenize test on full corpus
     pipeline = DataPipeline(config.DataConfig)
     train_loader, valid_loader = pipeline.make_pipeline()
     

@@ -1,11 +1,16 @@
 {
+  "_comment": "Full GeneratorConfig source of truth. config.from_json ignores unknown keys.",
   "seed": 42,
   "device": "cuda",
-  "ckpt_path": "checkpoints/mini/step_3500.pt",
+  "ckpt_path": "checkpoints/mini/step_15000.pt",
   "output_dir": "samples/",
   "temperature": 0.8,
-  "top_k": 50,
+  "top_k": 100,
   "top_p": 0.95,
-  "max_tokens": 10000,
-  "banned_tokens": 50256
+  "max_tokens": 2048,
+  "banned_tokens": 50256,
+  "keep": 520,
+  "anneal": "temp",
+  "caching": true,
+  "to_json": false
 }

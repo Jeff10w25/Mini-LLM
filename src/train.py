@@ -272,29 +272,3 @@ class Trainer:
         # optional save to json files once training finished
         save_json(os.path.join(self.cfg.ckpt_dir, "history.json"), self.history)
         return self.history
-                
-if __name__ == '__main__':
-    import data, config, model
-    print(f"threads: {torch.get_num_threads()}, cores: {os.cpu_count()}")
-    pipeline = data.DataPipeline(config.DataConfig())
-    train_loader, valid_loader, train_sampler = pipeline.make_pipeline()
-    
-    model = model.MiniGPT(config.ModelConfig())
-    if torch.cuda.is_available():
-        model = torch.compile(model)    
-    trainer = Trainer(model, config.TrainConfig())
-    resume = "checkpoints/step_10000.pt"
-    history = trainer.train(train_loader, valid_loader, train_sampler, resume)
-    
-    # x = torch.randint(0, 50257, (32, 128))
-    # model.train()
-
-    # t0 = time.time()
-    # with torch.no_grad():
-    #     logits = model(x)
-    # print(f"forward: {time.time()-t0:.2f}s")
-
-    # t0 = time.time()
-    # with torch.no_grad():
-    #     logits = model(x)   # second call — warm
-    # print(f"forward (warm): {time.time()-t0:.2f}s")

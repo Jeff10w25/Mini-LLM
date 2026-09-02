@@ -1,6 +1,9 @@
 {
-  "lr": 3e-4,
+  "_comment": "Full TrainConfig source of truth (mini-90M). config.from_json ignores unknown keys.",
+  "seed": 42,
+  "lr": 0.0003,
+  "grad_accum": 8,
   "max_iters": 15000,
   "eval_every": 500,
-  "ckpt_dir": "checkpoints/"
+  "ckpt_dir": "checkpoints/mini/"
 }
