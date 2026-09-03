@@ -66,6 +66,7 @@ class GeneratorConfig:
     anneal: str | None  = None  # "temp" | "top_k" | "top_p" | None
     caching: bool       = True  # use the KV cache
     to_json: bool       = False  # append the run to a generations_*.jsonl
+    preset: str | None  = "Default"
 
 T = TypeVar("T")
 

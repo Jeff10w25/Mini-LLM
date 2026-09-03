@@ -130,31 +130,49 @@ class Generator:
         self.tokenizer = tiktoken.get_encoding("r50k_base")
         self.model_cfg = model_cfg
         self.gen_cfg = gen_cfg
-        self._current_preset = None
+        self._current_preset = "Default"
 
     def is_repeating(
         self,
         total_ids: Tensor,
-        n: int = 4,
-        tail: int = 32,
-        threshold: float = 0.3,
+        tail: int = 64,      
+        n_vals: tuple[int, int] = (4, 8),
+        threshold: float = 0.4, 
     ) -> bool:
-        
+        """Looking back n tokens to see the repeated n-gram of 4 and 8"""
         tokens = total_ids[0, -tail:].tolist()
-        seen = set()
-        repeats = 0
-        for i in range(len(tokens) - n + 1):
-            gram = tuple(tokens[i:i + n])
-            if gram in seen:
-                repeats += 1
-            else:
-                seen.add(gram)
-        return (repeats / (len(tokens) - n + 1)) > threshold
+        for n in n_vals:
+            if len(tokens) < n:
+                continue
+            seen: set[tuple[int, ...]] = set()
+            repeats = 0
+            total = len(tokens) - n + 1
+            for i in range(total):
+                gram = tuple(tokens[i : i + n])
+                if gram in seen:
+                    repeats += 1
+                else:
+                    seen.add(gram)
+            if repeats / total > threshold:
+                return True
+        return False
 
-    def gen_annealing(self, total_ids: Tensor, annealing: str | None = None):
+    def gen_annealing(
+        self,
+        total_ids: Tensor,
+        annealing: str | None = None,
+        base: tuple[float, int | None, float | None] | None = None,
+    ):
+        """Adjust sampler params on n-gram repetition, decaying back to `base`.
+        `base` is the sampler params captured once at the start of generation, so the
+        decay branch lowers toward the intended values instead of toward the live
+        (already drifted) ones.
+        """
         if annealing is None:
             return
-        base_temp, base_k, base_p = self.sampler.temperature, self.sampler.top_k, self.sampler.top_p
+        if base is None:
+            base = (self.sampler.temperature, self.sampler.top_k, self.sampler.top_p)
+        base_temp, base_k, base_p = base
         max_temp, max_k, max_p = 2.0, 1000, 0.99
 
         if self.is_repeating(total_ids):
@@ -166,11 +184,11 @@ class Generator:
             elif annealing == "top_p" and self.sampler.top_p is not None:
                 self.sampler.top_p = min(self.sampler.top_p + 0.05, max_p)
         else:
-            # if no longer repeating, decrease toward base value
+            # if no longer repeating, decrease toward the stored base value
             if annealing == "temp":
                 self.sampler.temperature = max(base_temp, self.sampler.temperature / 1.1)
             elif annealing == "top_k" and self.sampler.top_k is not None:
-                self.sampler.top_k = max(base_k, self.sampler.top_k // 1.5)
+                self.sampler.top_k = max(base_k, int(self.sampler.top_k // 1.5))
             elif annealing == "top_p" and self.sampler.top_p is not None:
                 self.sampler.top_p = max(base_p, self.sampler.top_p - 0.05)
 
@@ -251,9 +269,9 @@ class Generator:
                             input_ids = input_ids[:, -window:]
                     generated.append(int(next_token[-1].item()))           # store token id as int
 
-                    # annealing check every step
+                    # annealing check every step (decays toward the captured base)
                     if gen_annealing is not None:
-                        self.gen_annealing(total_ids, annealing=gen_annealing)
+                        self.gen_annealing(total_ids, annealing=gen_annealing, base=sampler_state)
 
                 full_text = self.tokenizer.decode(generated)
         finally:
@@ -299,10 +317,11 @@ def main():
                         help="sliding-window length (default from gen.json keep)")
     parser.add_argument("--anneal", default=None, choices=[None, "temp", "top_k", "top_p"],
                         help="loosen sampler params when n-gram repetition is detected")
-    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-cache", action="store_true", help="disable the KV cache")
     parser.add_argument("--to-json", action="store_true",
                         help="append the run to generations_*.jsonl in gen.json output_dir")
+    parser.add_argument("--preset", default="Default")
     args = parser.parse_args()
 
     model_cfg = config.from_json(config.ModelConfig, args.model_json)

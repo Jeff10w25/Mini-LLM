@@ -4,13 +4,13 @@
   "device": "cuda",
   "ckpt_path": "checkpoints/mini/step_15000.pt",
   "output_dir": "samples/",
-  "temperature": 0.8,
-  "top_k": 100,
-  "top_p": 0.95,
+  "temperature": 1.0,
+  "top_k": null,
+  "top_p": 0.9,
   "max_tokens": 2048,
   "banned_tokens": 50256,
-  "keep": 520,
-  "anneal": "temp",
+  "keep": 512,
+  "anneal": null,
   "caching": true,
   "to_json": false
 }
