@@ -1,144 +1,270 @@
 # Mini-LLM
 
-A GPT-style causal decoder-only transformer, built from scratch in PyTorch and trained on [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) (~2B tokens).
+A 90M-parameter GPT-style decoder-only transformer built from scratch in PyTorch and trained from scratch on 2 billion tokens of [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu).
 
-## Zero shot benchmark results
+**Model weights:** TODO: upload model weights to Hugging Face and add link here
 
-MiniGPT (90M, step_15000) vs GPT-2 small (124M), evaluated with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)
-**bold = better**
+## 1. Results
 
-**Accuracy** (report **acc_norm** when available, else **acc**, higher is better)
+### Zero-Shot Benchmarks
 
-| Task | MiniGPT (90M) | GPT-2 small (124M) | Δ |
-| :--- | ---: | ---: | ---: |
-| Lambada | 0.192 ± 0.005 | **0.326** ± 0.007 | −0.134 |
-| HellaSwag | 0.282 ± 0.004 | **0.311** ± 0.005 | −0.029 |
-| ARC-Easy | **0.416** ± 0.010 | 0.395 ± 0.010 | **+0.021** |
-| ARC-Challenge | **0.239** ± 0.012 | 0.227 ± 0.012 | **+0.012** |
-| PIQA | 0.591 ± 0.011 | **0.625** ± 0.011 | −0.034 |
-| WinoGrande | 0.511 ± 0.014 | **0.516** ± 0.014 | −0.005 |
+MiniGPT (90M, step 15,000) vs GPT-2 small (124M), evaluated with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
 
-**Perplexity** (whole-corpus, lower is better)
+Higher is better for accuracy. Lower is better for perplexity.
 
-| Task | MiniGPT (90M) | GPT-2 small (124M) | Δ |
-| :--- | ---: | ---: | ---: |
-| Lambada | 358.3 | **40.1** | +318.2 |
-| Wikitext (word) | 64.1 | **37.4** | +26.7 |
+**Accuracy** (higher is better)
 
-On accuracy MiniGPT is competitive on most tasks (except Lambada) and even beats GPT-2 on ARC-Easy and ARC-Challenge.
+| Task          |     MiniGPT (90M) | GPT-2 small (124M) |          Δ |
+| :------------ | ----------------: | -----------------: | ---------: |
+| Lambada       |     0.192 ± 0.005 |  **0.326** ± 0.007 |     −0.134 |
+| HellaSwag     |     0.282 ± 0.004 |  **0.311** ± 0.005 |     −0.029 |
+| ARC-Easy      | **0.416** ± 0.010 |      0.395 ± 0.010 | **+0.021** |
+| ARC-Challenge | **0.239** ± 0.012 |      0.227 ± 0.012 | **+0.012** |
+| PIQA          |     0.591 ± 0.011 |  **0.625** ± 0.011 |     −0.034 |
+| WinoGrande    |     0.511 ± 0.014 |  **0.516** ± 0.014 |     −0.005 |
 
-**Why the perplexity score is much higher?**
+**Perplexity** (Whole-corpus perplexity, lower is better.)
 
-1. **Data scale**: MiniGPT trained on 2B tokens vs GPT-2's 10B+, so its
-   long-tail word knowledge is thinner.
-2. **Domain shift**: `wikitext` (and to a degree Lambada) is out of
-   distribution vs the educational fineweb-edu corpus. Wikitext
-   `word_perplexity` (64 vs 37, ~1.7×) is the cleaner comparison.
-3. **Model is still improving**: the earlier `step_13000` scores are worse
-   on every generative metric (Lambada ppl 411.5 / acc 0.191, Wikitext word_ppl
-   66.3), so `step_15000` is reported and the model is still improving with no signs of overfitting.
+| Task            | MiniGPT (90M) | GPT-2 small (124M) |      Δ |
+| :-------------- | ------------: | -----------------: | -----: |
+| Lambada         |         358.3 |           **40.1** | +318.2 |
+| Wikitext (word) |          64.1 |           **37.4** |  +26.7 |
 
-## Model Architecture
+### Training Dynamics
 
-| | |
-|---|---|
-| Vocab / context | 50,257 tokens (BPE, r50k) / seq_len **1024** |
-| Hidden / heads / layers | embed_dim **640** / **10** heads / **12** layers |
-| Attention | fused QKV -> **RoPE** rotary positions -> causal masked **MHA** |
-| Feed-forward | **SwiGLU** (SiLU-gated), ~2.67× expansion, no bias |
-| Normalization | pre-norm **RMSNorm** before attn + FFN |
-| Output | final RMSNorm and tied LM head (shared embedding weights) |
+Training and validation loss over steps 0 to 15,000.
 
-Highlights:
-- **RoPE** (Rotary positional encoding) fixed position table and compute via rotation.
-- **Fused QKV** projection and **fused SwiGLU gate+up** for fewer matmuls.
-- **Pre-norm + residual** transformer blocks.
+![Training and validation loss](assets/loss_curve.png)
 
-## Features
+Validation loss continues to track training loss through the end of the run.
 
-- KV cache + sliding-window generation: reduces load on memory and handles beyond context generation
-- Text sampling with temperature / top-k / top-p + repetition annealing
-- JSON configs as the single source of truth (`configs/*.json`)
-- Generated text quality analyzer (repetition rate)
-- lm-eval benchmark harness for MiniGPT + GPT-2
-- pytest suite (fast/slow markers)
+### Text Generation Samples
 
-## Project Structure
+Samples generated from MiniGPT at step 15,000.
+
+**Sample 1**
+
+```text
+TODO: paste generation sample here
+```
+
+**Sample 2**
+
+```text
+TODO: paste generation sample here
+```
+
+**Sample 3**
+
+```text
+TODO: paste generation sample here
+```
+
+### Findings
+
+* MiniGPT matches or exceeds GPT-2 small on ARC-Easy and ARC-Challenge despite having fewer parameters.
+* LAMBADA is the largest weakness in both accuracy and perplexity.
+* Wikitext word perplexity is substantially closer to GPT-2 than LAMBADA perplexity.
+* The model improved between step 13,000 and step 15,000 across the reported generative metrics.
+* Validation loss continues to track training loss at step 15,000, suggesting the run had not clearly plateaued.
+
+### Interpreting the Perplexity Gap
+
+MiniGPT's perplexity is substantially higher than GPT-2's on the reported tasks. Several factors may contribute:
+
+1. **Training data scale:** MiniGPT was trained on 2B tokens, while GPT-2 was trained on a substantially larger corpus.
+2. **Domain shift:** Wikitext and LAMBADA differ from the FineWeb-Edu training distribution. Wikitext word perplexity provides a cleaner comparison than LAMBADA for this model.
+3. **Training progress:** The model was still improving at step 15,000. The earlier step 13,000 checkpoint had worse generative metrics across the reported evaluations.
+
+These results are from a single 90M-parameter model trained for 2B tokens, so they should be interpreted in the context of the different model sizes, datasets, and training budgets.
+
+## 2. Model Architecture
+
+![Model Architecture](assets/model_architecture.png)
+
+|                         |                                                                 |
+| ----------------------- | --------------------------------------------------------------- |
+| Vocab / context         | 50,257 tokens (BPE, r50k) / seq_len **1024**                    |
+| Hidden / heads / layers | embed_dim **640** / **10** heads / **12** layers                |
+| Attention               | fused QKV -> **RoPE** rotary positions -> causal masked **MHA** |
+| Feed-forward            | **SwiGLU** (SiLU-gated), ~**2.6×** expansion, no bias           |
+| Normalization           | pre-norm **RMSNorm** before attention + FFN                     |
+| Output                  | final RMSNorm and tied LM head (shared embedding weights)       |
+
+## 3. Implementation
+
+* KV cache with sliding-window generation for generation beyond the training context.
+* Text sampling with temperature, top-k, top-p, and repetition annealing.
+* JSON configs as the single source of truth in `configs/*.json`.
+* Generated text quality analyzer for repetition rate.
+* `lm-eval` benchmark harness for MiniGPT and GPT-2.
+* Pytest suite with fast and slow markers.
+* Distributed training with DDP.
+* `torch.compile` support for GPU training.
+
+## 4. Project Structure
 
 ```text
 src/
-├── main.py            # training entrypoint (loads configs/*.json)
-├── train.py           # Trainer: AMP, grad-accum, DDP, resume, eval, ckpt
-├── model.py           # MiniGPT, MultiHeadAttention, KVCache, SwiGLU
-├── pos_encoding.py    # RoPE + sinusoidal variants
-├── data.py            # FineWeb-Edu streaming -> tokenized .bin + DataLoader
-├── generate.py        # Generator + sampler (KV cache, sliding window, CLI)
-├── analyzer.py        # summarize samples/*.jsonl into a comparison table
-├── config.py          # dataclasses + from_json/to_json
-├── utils.py           # shared helpers
-└── benchmark/         # bench.py + MiniGPT_LM wrapper (lm-eval)
-configs/               # model.json, data.json, train.json, gen.json, bench.json
-tests/                 # pytest (fast + slow)
-checkpoints/           # trained checkpoints (gitignored)
-samples/               # generation experiment logs (JSONL)
+├── main.py           # training entrypoint (loads configs/*.json)
+├── train.py          # Trainer: AMP, grad-accum, DDP, resume, eval, ckpt
+├── model.py          # MiniGPT, MultiHeadAttention, KVCache, SwiGLU
+├── pos_encoding.py   # RoPE + sinusoidal variants
+├── data.py           # FineWeb-Edu streaming -> tokenized .bin + DataLoader
+├── generate.py       # Generator + sampler (KV cache, sliding window, CLI)
+├── analyzer.py       # summarize samples/*.jsonl into a comparison table
+├── config.py         # dataclasses + from_json/to_json
+├── utils.py          # shared helpers
+└── benchmark/        # bench.py + MiniGPT_LM wrapper (lm-eval)
+
+configs/              # model.json, data.json, train.json, gen.json, bench.json
+tests/                # pytest (fast + slow)
+checkpoints/          # trained checkpoints (gitignored)
+samples/              # generation experiment logs (JSONL)
 ```
 
-## Setup
+## 5. Setup
 
-All configs live in `configs/*.json` (single source of truth). But can use CLI flags to override them. Recommend training on GPU if available, will require different torch version.
+### Requirements
+
+The project is written in Python and PyTorch. GPU training is recommended.
+
+All configuration files live in `configs/*.json`. CLI flags can override individual configuration values when needed.
 
 ```bash
 pip install -r requirements.txt
 
 # CPU
 pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 # CUDA
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 ```
 
-## Training
+The CUDA PyTorch installation should match the CUDA environment available on the machine.
+
+### Configuration
+
+The main configuration files are:
+
+```text
+configs/
+├── model.json
+├── data.json
+├── train.json
+├── gen.json
+└── bench.json
+```
+
+The JSON files are the primary source of model, data, training, generation, and benchmark configuration. CLI overrides can be used for individual experiments without modifying the files.
+
+## 6. Training Setup
+
+The reported training run used:
+
+|                              |                                    |
+| ---------------------------- | ---------------------------------- |
+| Model                        | 90M parameters                     |
+| Dataset                      | FineWeb-Edu                        |
+| Training tokens              | 2B                                 |
+| Context length               | 1024                               |
+| Global batch size            | 16                                 |
+| Gradient accumulation        | 8 steps                            |
+| Effective batch size         | 128 sequences                      |
+| Tokens per optimization step | 131,072                            |
+| Hardware                     | 2× NVIDIA T4                       |
+| Distributed training         | PyTorch DDP                        |
+| Compilation                  | `torch.compile`                    |
+| Total GPU time               | ~20 hours across 4 Kaggle sessions |
+| Training throughput          | ~30k train tokens/s                |
+
+The training was split across four Kaggle sessions because of the 12-hour session limit.
+
+## 7. Reproducing Training
+
+Run a short smoke test:
 
 ```bash
-# smoke run (caps max_iters without editing JSON)
 python src/main.py --steps 500
+```
 
-# real run, resume from a checkpoint
+Resume training from a checkpoint:
+
+```bash
 python src/main.py --resume checkpoints/mini/step_15000.pt
+```
 
-# override any config field
+Override configuration values from the command line:
+
+```bash
 python src/main.py --override data.num_workers=8 train.max_iters=20000
+```
 
-# enable torch.compile (GPU + Linux recommended; skip on Windows)
+Enable `torch.compile`:
+
+```bash
 python src/main.py --compile
-
-# multi-GPU training with torch.distributed and torch.compile (recommend for kaggle 2xT4)
-torchrun --nproc_per_node=2 src/main.py --resume checkpoints/mini/step_15000.pt --compile
 ```
 
-## Text Generation
+Run multi-GPU training with DDP and `torch.compile`:
 
 ```bash
-python src/generate.py --prompt "Once upon a time" --max-tokens 300 \
-    --temperature 0.8 --top-k 50 --top-p 0.95
+torchrun --nproc_per_node=2 src/main.py \
+    --resume checkpoints/mini/step_15000.pt \
+    --compile
 ```
 
-## Evaluation with lm-evaluation-harness
+## 8. Text Generation
+
+Generate text from a prompt:
 
 ```bash
-# run from the repo root (wrapper uses relative paths)
+python src/generate.py \
+    --prompt "Once upon a time" \
+    --max-tokens 300 \
+    --temperature 0.8 \
+    --top-k 50 \
+    --top-p 0.95
+```
+
+Generation supports KV caching, sliding-window context, temperature sampling, top-k sampling, top-p sampling, and repetition annealing.
+
+## 9. Text Quality Analysis
+
+Summarize all generated samples and calculate repetition statistics:
+
+```bash
+python -m src\benchmark\analyzer.py
+```
+
+
+
+```bash
+python analyze.py samples/generations_step_6500.jsonl
+```
+
+## 10. Benchmarking
+
+Run the benchmark harness from the repository root:
+
+```bash
 python -m src\benchmark\bench.py
 ```
 
-## Testing
+## 11. Testing
+
+Run the full test suite:
 
 ```bash
-# test all
 python -m pytest tests/
+```
 
-# test only not slow one
+Run only the fast tests:
+
+```bash
 python -m pytest tests/ -m "not slow"
 ```
 
-## License
+## 12. License
 
 MIT
