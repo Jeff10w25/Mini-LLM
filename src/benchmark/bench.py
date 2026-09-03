@@ -30,7 +30,7 @@ def main():
         batch_size=args.batch_size,
         verbosity=args.verbosity,
         bootstrap_iters=args.bootstrap_iters,
-        task_manager=TaskManager(include_path="configs/"),
+        # task_manager=TaskManager(include_path="configs/"),
     )
 
     def first(*vals: Any) -> Any:     # first non-None value (keeps a legit 0.0)
