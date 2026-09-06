@@ -29,7 +29,11 @@ import utils
 from train import Trainer
 
 
-def load_configs(model_json: str, data_json: str, train_json: str):
+def load_configs(
+    model_json: str, 
+    data_json: str, 
+    train_json: str
+) -> tuple[config.ModelConfig, config.DataConfig, config.TrainConfig]:
     """Build the three config dataclasses from JSON (values win, defaults for missing keys)."""
     model_cfg = config.from_json(config.ModelConfig, model_json)
     data_cfg = config.from_json(config.DataConfig, data_json)
@@ -60,8 +64,6 @@ def main():
         args.data_json, 
         args.train_json
     )
-
-    # seed for reproducibility
     utils.seed_everything(train_cfg.seed)
 
     # apply --override after loading, then the --steps smoke shortcut last

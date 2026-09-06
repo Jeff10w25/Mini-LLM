@@ -1,4 +1,6 @@
-"""data.py - token arrays, TokenDataset, and dataset construction."""
+"""
+data.py - token arrays, TokenDataset, and dataset construction.
+"""
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
@@ -176,7 +178,7 @@ class DataPipeline:
         valid_ds = TokenDataset(path=self.cfg.valid_bin_path, seq_len=self.cfg.seq_len, stride=self.cfg.stride, max_tokens=self.cfg.val_monitor_token)
         return train_ds, valid_ds
 
-    def make_loader(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None, DistributedSampler | None]:
+    def make_loader(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
         """Build train/validation dataloader. Also handles DDP using DistributedSampler"""
         train_ds, valid_ds = self.make_dataset()
         world_size = int(os.environ.get("WORLD_SIZE", 1)) 
@@ -214,7 +216,7 @@ class DataPipeline:
         r0print("Train/Validation DataLoader loaded")
         return train_loader, valid_loader, train_sampler
     
-    def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None, DistributedSampler | None]:
+    def make_pipeline(self) -> tuple[DataLoader, DataLoader, DistributedSampler | None]:
         """Make full pipeline. Only need to call this method"""
         self.check_corpus_exist()
         self._verify_sizes()

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import TypeVar, Type
+from typing import Any, TypeVar, Type
 
 @dataclass
 class ModelConfig:
@@ -66,6 +66,7 @@ class GeneratorConfig:
     anneal: str | None  = None  # "temp" | "top_k" | "top_p" | None
     caching: bool       = True  # use the KV cache
     to_json: bool       = False  # append the run to a generations_*.jsonl
+    preset: str | None  = "Default"
 
 T = TypeVar("T")
 
@@ -76,7 +77,7 @@ def from_json(cls: Type[T], path: str | Path) -> T:
     valid = {f.name for f in fields(cls)}
     return cls(**{k: v for k, v in data.items() if k in valid})
 
-def to_json(cfg, path: str | Path) -> None:
+def to_json(cfg: Any, path: str | Path):
     """Save a config dataclass to JSON (so a run records exactly what it used)."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg.__dict__, f, indent=2)

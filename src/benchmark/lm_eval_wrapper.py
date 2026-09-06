@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from lm_eval.api.model import LM
 from lm_eval.api.registry import register_model
-from lm_eval import utils  # get_rolling_token_windows / make_disjoint_window (rolling PPL)
+from lm_eval import utils 
 from transformers import GPT2TokenizerFast
 import config
 from model import MiniGPT
@@ -33,6 +33,7 @@ class MiniGPT_LM(LM):
         device: str = "cpu", 
         batch_size: int = 1
         ):
+        
         super().__init__()
         state = torch.load(ckpt_path, map_location=device, weights_only=False)
         cfg = config.from_json(config.ModelConfig, "configs/model.json")
@@ -146,15 +147,18 @@ class MiniGPT_LM(LM):
         (e.g. wikitext). Returns one summed log-prob per request, as a list of floats.
 
         Mirrors lm_eval's HFLM algorithm exactly so the resulting perplexity is
-        directly comparable to the GPT-2 reference
+        directly comparable to the GPT-2 reference: each request carries its text in
+        `.args`, windows come from utils.get_rolling_token_windows + make_disjoint_window
+        with the same prefix/eot token and max_seq_len, and only the trailing
+        len(continuation) logits are scored.
         """
         max_len = int(self.max_length)
-        reqs = list(requests)
-        total_logprob = [0.0] * len(reqs)
+        strings = [req.args[0] for req in requests]   # each Instance.args == (text,)
+        total_logprob = [0.0] * len(strings)
 
         # windows: (req_idx, inp_tokens, ncont, cont_tokens)
         windows = []
-        for idx, (string,) in enumerate(reqs):
+        for idx, string in enumerate(strings):
             toks = self.tokenizer.encode(string)
             if not toks:
                 continue

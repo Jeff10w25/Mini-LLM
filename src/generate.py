@@ -1,7 +1,8 @@
 """generate.py - TextGenSampler + Generator (engine) and a JSON+argparse CLI.
 
-Run:
-    python generate.py --prompt "Once upon a time" --max-tokens 200 --temperature 0.8 --top-k 50
+Running the generation
+    Override JSON: python generate.py --prompt "Once upon a time" --max-tokens 200 --temperature 0.8 --top-k 50
+    JSON based: python generate.py --prompt "Once upon a time"
 
 Config source of truth = configs/model.json (model) + configs/gen.json (sampling).
 CLI flags override gen.json for a single run; nothing is written back.
@@ -33,7 +34,7 @@ class TextGenSampler:
     """Sampler for next-token decoding.
 
     Applies, in order: banned-token masking -> temperature -> top-k -> softmax
-    -> top-p. temperature <= 0 selects greedy argmax and ignores the rest.
+    -> top-p. If temperature <= 0, selects greedy argmax and ignores the rest.
     """
     def __init__(
         self,
@@ -42,6 +43,7 @@ class TextGenSampler:
         top_p: float | None = None,
         banned_tokens: int | None = None,
     ):
+        
         if (top_k is not None) and top_k <= 0:
             raise ValueError("Top-k cannot be 0 or float")
         if (top_p is not None) and not (0.0 < top_p < 1.0):
@@ -51,7 +53,7 @@ class TextGenSampler:
         self.top_p = top_p
         self.banned_tokens = banned_tokens
 
-    def __call__(self, logits: Tensor):
+    def __call__(self, logits: Tensor) -> Tensor:
         if self.temperature <= 0:
             # greedy sampling, ignore top_p and top_k and select highest logit's token
             return logits.argmax(dim=-1, keepdim=True)
@@ -70,21 +72,21 @@ class TextGenSampler:
 
         return torch.multinomial(probs, 1)
 
-    def _apply_softmax(self, logits: Tensor):
+    def _apply_softmax(self, logits: Tensor) -> Tensor:
         return F.softmax(logits, dim=-1)
 
-    def _apply_temperature(self, logits: Tensor):
+    def _apply_temperature(self, logits: Tensor) -> Tensor:
         if self.temperature > 0:  # just to prevent dividing with 0
             return logits / self.temperature
 
-    def _apply_top_k(self, logits: Tensor):
+    def _apply_top_k(self, logits: Tensor) -> Tensor:
         """Take top_k val/idx, return mask with all value except top_k val/idx negative infinity"""
         top_k_vals, top_k_idx = torch.topk(logits, self.top_k, dim=-1)
         mask = torch.full_like(logits, -torch.inf)
         mask.scatter_(index=top_k_idx, src=top_k_vals, dim=-1)
         return mask
 
-    def _apply_top_p(self, probs: Tensor):
+    def _apply_top_p(self, probs: Tensor) -> Tensor:
         """Take top_p val/idx, return top_p val/idx with normalized probabilities. Other idx prob is 0"""
         if 0.0 < self.top_p < 1.0:
             # sort probs in descending order and do cumulative sum
@@ -107,6 +109,16 @@ class TextGenSampler:
 
 
 class Generator:
+    """Autoregressive text generator that runs a MiniGPT checkpoint with a KV cache.
+
+    Loads weights from a checkpoint, decodes token-by-token with a TextGenSampler,
+    and optionally slides a context window and anneals sampling to fight repetition.
+
+    Args:
+        model_cfg: Model hyperparameters
+        gen_cfg: Generation settings (checkpoint path, device, sampler params,
+            max_tokens, output_dir, ...)
+    """
     def __init__(self, model_cfg: ModelConfig, gen_cfg: GeneratorConfig):
         self.device = gen_cfg.device
         model_state = torch.load(gen_cfg.ckpt_path, map_location=self.device, weights_only=False)["model"]
@@ -118,30 +130,49 @@ class Generator:
         self.tokenizer = tiktoken.get_encoding("r50k_base")
         self.model_cfg = model_cfg
         self.gen_cfg = gen_cfg
-        self._current_preset = None
+        self._current_preset = "Default"
 
     def is_repeating(
         self,
         total_ids: Tensor,
-        n: int = 4,
-        tail: int = 32,
-        threshold: float = 0.3,
+        tail: int = 64,      
+        n_vals: tuple[int, int] = (4, 8),
+        threshold: float = 0.4, 
     ) -> bool:
+        """Looking back n tokens to see the repeated n-gram of 4 and 8"""
         tokens = total_ids[0, -tail:].tolist()
-        seen = set()
-        repeats = 0
-        for i in range(len(tokens) - n + 1):
-            gram = tuple(tokens[i:i + n])
-            if gram in seen:
-                repeats += 1
-            else:
-                seen.add(gram)
-        return (repeats / (len(tokens) - n + 1)) > threshold
+        for n in n_vals:
+            if len(tokens) < n:
+                continue
+            seen: set[tuple[int, ...]] = set()
+            repeats = 0
+            total = len(tokens) - n + 1
+            for i in range(total):
+                gram = tuple(tokens[i : i + n])
+                if gram in seen:
+                    repeats += 1
+                else:
+                    seen.add(gram)
+            if repeats / total > threshold:
+                return True
+        return False
 
-    def gen_annealing(self, total_ids: Tensor, annealing: str | None = None):
+    def gen_annealing(
+        self,
+        total_ids: Tensor,
+        annealing: str | None = None,
+        base: tuple[float, int | None, float | None] | None = None,
+    ):
+        """Adjust sampler params on n-gram repetition, decaying back to `base`.
+        `base` is the sampler params captured once at the start of generation, so the
+        decay branch lowers toward the intended values instead of toward the live
+        (already drifted) ones.
+        """
         if annealing is None:
             return
-        base_temp, base_k, base_p = self.sampler.temperature, self.sampler.top_k, self.sampler.top_p
+        if base is None:
+            base = (self.sampler.temperature, self.sampler.top_k, self.sampler.top_p)
+        base_temp, base_k, base_p = base
         max_temp, max_k, max_p = 2.0, 1000, 0.99
 
         if self.is_repeating(total_ids):
@@ -153,15 +184,15 @@ class Generator:
             elif annealing == "top_p" and self.sampler.top_p is not None:
                 self.sampler.top_p = min(self.sampler.top_p + 0.05, max_p)
         else:
-            # if no longer repeating, decrease toward base value
+            # if no longer repeating, decrease toward the stored base value
             if annealing == "temp":
                 self.sampler.temperature = max(base_temp, self.sampler.temperature / 1.1)
             elif annealing == "top_k" and self.sampler.top_k is not None:
-                self.sampler.top_k = max(base_k, self.sampler.top_k // 1.5)
+                self.sampler.top_k = max(base_k, int(self.sampler.top_k // 1.5))
             elif annealing == "top_p" and self.sampler.top_p is not None:
                 self.sampler.top_p = max(base_p, self.sampler.top_p - 0.05)
 
-    def _raw_model(self):
+    def _raw_model(self) -> nn.Module:
         model = self.model
         model = getattr(model, "_orig_mod", model)   # strip torch.compile (outer layer)
         model = getattr(model, "module", model)      # strip DDP (inner layer), if present
@@ -185,9 +216,9 @@ class Generator:
         to_json: bool = False,
         gen_annealing: str | None = None,
     ) -> str:
-        # No instance side effects: run params are resolved to locals and the sampler
-        # state is restored afterwards, so calling generate() again starts clean and
-        # does not overwrite self.max_tokens or leak drifted anneal params.
+        """No instance side effects: run params are resolved to locals and the sampler
+        state is restored afterwards, so calling generate() again starts clean and
+        does not overwrite self.max_tokens or leak drifted anneal params."""
         sampler_state = (self.sampler.temperature, self.sampler.top_k, self.sampler.top_p)
 
         use_full_window = keep is None        # no window -> generate seq_len tokens
@@ -233,15 +264,14 @@ class Generator:
                             input_ids = total_ids                 # next loop call pre-fills the window
                             offset = 0
                     else:
-                        input_ids = torch.cat([input_ids, next_token], dim=-1)  # [1, S+1]
+                        input_ids = torch.cat([input_ids, next_token], dim=-1)
                         if input_ids.shape[1] >= self.model_cfg.seq_len:  # if about to exceed seq_len
                             input_ids = input_ids[:, -window:]
                     generated.append(int(next_token[-1].item()))           # store token id as int
 
-                    # temperature annealing check every step (mutates the sampler only
-                    # for this run; state is restored in `finally` below)
+                    # annealing check every step (decays toward the captured base)
                     if gen_annealing is not None:
-                        self.gen_annealing(total_ids, annealing=gen_annealing)
+                        self.gen_annealing(total_ids, annealing=gen_annealing, base=sampler_state)
 
                 full_text = self.tokenizer.decode(generated)
         finally:
@@ -252,10 +282,10 @@ class Generator:
         print(f"Generation time: {t1 - t0:.3f}s\n")
         print(full_text)
 
-        # if saving to JSON (records the configured sampler values actually used)
+        # if saving to JSON 
         if to_json:
             self.save_output({
-                "preset": self._current_preset,        # optional: set before calling
+                "preset": self._current_preset,        # optional
                 "temperature": sampler_state[0],
                 "top_k": sampler_state[1],
                 "top_p": sampler_state[2],
@@ -287,10 +317,11 @@ def main():
                         help="sliding-window length (default from gen.json keep)")
     parser.add_argument("--anneal", default=None, choices=[None, "temp", "top_k", "top_p"],
                         help="loosen sampler params when n-gram repetition is detected")
-    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-cache", action="store_true", help="disable the KV cache")
     parser.add_argument("--to-json", action="store_true",
                         help="append the run to generations_*.jsonl in gen.json output_dir")
+    parser.add_argument("--preset", default="Default")
     args = parser.parse_args()
 
     model_cfg = config.from_json(config.ModelConfig, args.model_json)
