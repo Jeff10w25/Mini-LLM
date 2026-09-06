@@ -1,5 +1,13 @@
-datasets>=2.14.0
-tiktoken>=0.5.0
-numpy>=1.24.0
-python-dotenv>=1.0.0
-pytest>=8.0.0
+# Runtime
+numpy>=1.24
+tiktoken>=0.5
+datasets>=2.14
+python-dotenv>=1.0
+tqdm>=4.69
+transformers>=4.40
+
+# lm-eval 
+lm-eval>=0.4.12
+
+# Tests
+pytest>=8.0

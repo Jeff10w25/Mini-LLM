@@ -1,16 +1,15 @@
 # Mini-LLM
 
-A 90M-parameter GPT-style decoder-only transformer built from scratch in PyTorch and trained from scratch on 2 billion tokens of [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu).
+A 90M-parameter GPT-style decoder-only transformer built from scratch in PyTorch and trained on 2 billion tokens of [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu).
 
-**Model weights:** TODO: upload model weights to Hugging Face and add link here
+**Model weights:** *TODO: upload model weights to Hugging Face and add link here*
 
 ## 1. Results
 
 ### Zero-Shot Benchmarks
 
-MiniGPT (90M, step 15,000) vs GPT-2 small (124M), evaluated with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
+MiniGPT (90M, step 15,000) vs GPT-2 small (124M), evaluated with lm-evaluation-harness. The benchmark covers a range of language understanding and reasoning tasks, including next-token prediction, commonsense reasoning, reading comprehension, and word-level knowledge.
 
-Higher is better for accuracy. Lower is better for perplexity.
 
 **Accuracy** (higher is better)
 
@@ -42,22 +41,28 @@ Validation loss continues to track training loss through the end of the run.
 
 Samples generated from MiniGPT at step 15,000.
 
-**Sample 1**
+**Sample 1** (temperature=0, greedy sampling)
 
 ```text
-TODO: paste generation sample here
+What is the capital of France and why does it matter historically?
+\nThe capital of France is the capital of France. It is the capital of France. 
+It is the capital of France. It is the capital of France. It is the capital of France.
 ```
 
-**Sample 2**
+**Sample 2** (temperature=1.0, top_k=None, top_p=0.95)
 
 ```text
-TODO: paste generation sample here
+Let's tell a stories about a researcher working on these issues. He was really qualified to receive the 
+Chief Account Number and Associate in Government and Liberal Affairs. The problem with the 6 units 
+(TCs, divided into CAPs and CAPs) is how you can preserve your time and your finance
 ```
 
-**Sample 3**
+**Sample 3** (extremely long context)
+The text below is generate with 10,240 token length. Below shows the ability to keep coherent text until the last token.
 
 ```text
-TODO: paste generation sample here
+She opened the letter and immediately knew that the news was too bad for the Editor ......
+this case focus is part of the Lawyers’ Center for Global Legal Studies, which reduces the" 
 ```
 
 ### Findings
@@ -65,8 +70,9 @@ TODO: paste generation sample here
 * MiniGPT matches or exceeds GPT-2 small on ARC-Easy and ARC-Challenge despite having fewer parameters.
 * LAMBADA is the largest weakness in both accuracy and perplexity.
 * Wikitext word perplexity is substantially closer to GPT-2 than LAMBADA perplexity.
-* The model improved between step 13,000 and step 15,000 across the reported generative metrics.
+* The model improved between step 13,000 and step 15,000 across the reported generative metrics (Lambada acc: 0.191 ± 0.005 ppl: 411.451, wikitext ppl: 66.267).
 * Validation loss continues to track training loss at step 15,000, suggesting the run had not clearly plateaued.
+* High-quality text generation remains challenging, with sampling strategies having a noticeable impact on output quality and providing opportunities for further experimentation.
 
 ### Interpreting the Perplexity Gap
 
@@ -84,12 +90,12 @@ These results are from a single 90M-parameter model trained for 2B tokens, so th
 
 |                         |                                                                 |
 | ----------------------- | --------------------------------------------------------------- |
-| Vocab / context         | 50,257 tokens (BPE, r50k) / seq_len **1024**                    |
-| Hidden / heads / layers | embed_dim **640** / **10** heads / **12** layers                |
-| Attention               | fused QKV -> **RoPE** rotary positions -> causal masked **MHA** |
-| Feed-forward            | **SwiGLU** (SiLU-gated), ~**2.6×** expansion, no bias           |
-| Normalization           | pre-norm **RMSNorm** before attention + FFN                     |
-| Output                  | final RMSNorm and tied LM head (shared embedding weights)       |
+| Vocab / context | 50,257 tokens (BPE, r50k) / seq_len 1024 |
+| Hidden / heads / layers | embed_dim 640 / 10 heads / 12 layers |
+| Attention | fused QKV → RoPE → causal masked MHA |
+| Feed-forward | SwiGLU (SiLU-gated), ~2.6× expansion, no bias |
+| Normalization | pre-norm RMSNorm before attention + FFN |
+| Output | final RMSNorm and tied LM head (shared embedding weights) |
 
 ## 3. Implementation
 
@@ -182,41 +188,35 @@ The training was split across four Kaggle sessions because of the 12-hour sessio
 
 ## 7. Reproducing Training
 
-Run a short smoke test:
+Use `--eval_every` to control how frequently evaluation and checkpointing are performed. And `--resume` to resume training from a checkpoint
+
+**Note:** When using `torch.compile`, the initial compilation can temporarily increase VRAM usage. If this causes an OOM, start with a smaller batch size and a lower `train.evals_every` value for the first run. Then increase the batch size once the first few steps of the model is saved
+
 
 ```bash
+# Run a short smoke test
 python src/main.py --steps 500
-```
 
-Resume training from a checkpoint:
+# Resume training from a checkpoint:
+python src/main.py --resume "checkpoints/mini/step_15000.pt"
 
-```bash
-python src/main.py --resume checkpoints/mini/step_15000.pt
-```
-
-Override configuration values from the command line:
-
-```bash
+# Override configuration values from the command line:
 python src/main.py --override data.num_workers=8 train.max_iters=20000
-```
 
-Enable `torch.compile`:
-
-```bash
+# Enable `torch.compile`:
 python src/main.py --compile
-```
 
-Run multi-GPU training with DDP and `torch.compile`:
-
-```bash
+# Run multi-GPU training with DDP and `torch.compile`:
 torchrun --nproc_per_node=2 src/main.py \
-    --resume checkpoints/mini/step_15000.pt \
+    --resume "checkpoints/mini/step_15000.pt" \
     --compile
 ```
 
 ## 8. Text Generation
 
-Generate text from a prompt:
+Generate text from a prompt with KV caching to reduce the memory load.
+
+**Note:** Generating text beyond the model context length need to specify `--keep` (the last n amount of tokens that model keeps to rebuild once the generated text length >= context)
 
 ```bash
 python src/generate.py \
@@ -224,44 +224,44 @@ python src/generate.py \
     --max-tokens 300 \
     --temperature 0.8 \
     --top-k 50 \
-    --top-p 0.95
+    --top-p 0.95 \
+    --max-tokens 2048 \
+    --keep 512
 ```
 
 Generation supports KV caching, sliding-window context, temperature sampling, top-k sampling, top-p sampling, and repetition annealing.
 
 ## 9. Text Quality Analysis
 
-Summarize all generated samples and calculate repetition statistics:
+Summarize all generated samples and calculate repetition statistics (n-gram and unique words):
 
 ```bash
-python -m src\benchmark\analyzer.py
-```
+# Analyze all .JSONL files in samples/
+python src/analyzer.py
 
-
-
-```bash
-python analyze.py samples/generations_step_6500.jsonl
+# Analyze specific .JSONL files in
+python src/analyze.py "samples/generations_step_6500.jsonl"
 ```
 
 ## 10. Benchmarking
 
-Run the benchmark harness from the repository root:
+Run the benchmark harness from the repository root. `--bootstrap_iters` is for calculating the std error which the default value is 100000 but it's not necessary to be that high to get usable result.
 
 ```bash
-python -m src\benchmark\bench.py
+python src/benchmark/bench.py \
+    --batch_size 16 \
+    --bootstrap_iters 1000 \
+    --ckpt "checkpoints/mini/step_15000.pt" \
+    --tasks lambada_openai wikitext
 ```
 
 ## 11. Testing
 
-Run the full test suite:
-
 ```bash
+# Run the full test suite:
 python -m pytest tests/
-```
 
-Run only the fast tests:
-
-```bash
+# Run only the fast tests:
 python -m pytest tests/ -m "not slow"
 ```
 
