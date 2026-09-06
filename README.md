@@ -123,7 +123,7 @@ src/
 ├── utils.py          # shared helpers
 └── benchmark/        # bench.py + MiniGPT_LM wrapper (lm-eval)
 
-configs/              # model.json, data.json, train.json, gen.json, bench.json
+configs/              # model.json, data.json, train.json, gen.json
 tests/                # pytest (fast + slow)
 checkpoints/          # trained checkpoints (gitignored)
 samples/              # generation experiment logs (JSONL)
@@ -158,8 +158,7 @@ configs/
 ├── model.json
 ├── data.json
 ├── train.json
-├── gen.json
-└── bench.json
+└── gen.json
 ```
 
 The JSON files are the primary source of model, data, training, generation, and benchmark configuration. CLI overrides can be used for individual experiments without modifying the files.
